@@ -1,0 +1,31 @@
+# Data directories
+/data/images
+/data/val
+/data/labels
+
+# Virtual environment
+/venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Model checkpoints and weights
+*.pt
+*.pth
+*.weights
+*.onnx
+
+# Logs and outputs
+runs/
+*.log
+*.csv
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
