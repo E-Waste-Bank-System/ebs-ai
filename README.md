@@ -66,6 +66,6 @@ yolo predict model=path/to/best.pt source=path/to/image.jpg
 
 ## Notes
 
-- The dataset is not included in this repository due to size constraints
+- Download Dataset [here](https://www.kaggle.com/datasets/akshat103/e-waste-image-dataset)
 - Model weights and checkpoints should be stored separately
 - Use the provided YAML configuration for training 
