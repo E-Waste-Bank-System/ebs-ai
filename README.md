@@ -1,10 +1,10 @@
 # E-Waste Object Classification Model
 
-This repository contains a YOLOv8-based object classification model for electronic waste (e-waste) items.
+This repository contains a YOLOv11-based object classification model for electronic waste (e-waste) items.
 
 ## Model Details
 
-- **Framework**: YOLOv8
+- **Framework**: YOLOv11
 - **Classes**: 9 e-waste categories
 - **Input**: RGB images
 - **Output**: Bounding boxes and class predictions
