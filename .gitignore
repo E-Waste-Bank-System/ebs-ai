@@ -1,7 +1,7 @@
 # Data directories
-/data/images
-/data/val
-/data/labels
+src/data/images
+src/data/val
+src/data/labels
 
 # Virtual environment
 /venv/

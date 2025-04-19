@@ -1,0 +1,18 @@
+train: ../images/train
+val: ../images/val
+
+
+names:[
+  "battery",
+  "laptop",
+  "phone",
+  "tablet",
+  "monitor",
+  "keyboard",
+  "printer",
+  "mouse",
+  "speaker",
+  "washing machine",
+  "refrigerator",
+  "television",
+  ]
