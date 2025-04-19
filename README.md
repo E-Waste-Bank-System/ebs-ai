@@ -5,21 +5,19 @@ This repository contains a YOLOv11-based object classification model for electro
 ## Model Details
 
 - **Framework**: YOLOv11
-- **Classes**: 10 e-waste categories
+- **Classes**: 8 e-waste categories
 - **Input**: RGB images
 - **Output**: Bounding boxes and class predictions
 
 ### Classes
-1. Battery
-2. Keyboard
-3. Microwave
-4. Mobile
+1. Laptop
+2. Phone
+3. Tablet
+4. Keyboard
 5. Mouse
-6. PCB
-7. Player
-8. Printer
-9. Television
-10. Washing Machine
+6. Printer
+7. Television
+8. Washing Machine
 
 ## Directory Structure
 
