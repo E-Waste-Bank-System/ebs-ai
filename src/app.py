@@ -33,7 +33,7 @@ try:
 except Exception as e:
     logger.error(f"Failed to load model: {e}")
     model = YOLO("yolov8n.pt")
-    logger.info("Loaded default YOLOv8n model")
+    logger.info("Loaded default YOLOv11n model")
 
 @app.route("/", methods=["GET"])
 def index():
