@@ -19,7 +19,7 @@ __pycache__/
 *$py.class
 
 # Model checkpoints and weights
-*.pt
+yolo*.pt
 *.pth
 *.weights
 *.onnx
