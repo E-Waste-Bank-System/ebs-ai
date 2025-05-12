@@ -135,6 +135,7 @@ jobs:
           env_vars: |
             ENABLE_GCS=true
             GCS_BUCKET=ebs-img-upload
+            MODEL_PATH=models/v3.pt
 
       # If required, use the Cloud Run url output in later steps
       - name: Show Output

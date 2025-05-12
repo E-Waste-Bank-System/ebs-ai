@@ -16,7 +16,7 @@ COPY . .
 
 RUN mkdir -p runs/detect
 
-ENV MODEL_PATH=models/yolo11n.pt
+ENV MODEL_PATH=models/v3.pt
 ENV PORT=8080
 ENV DEBUG=False
 
