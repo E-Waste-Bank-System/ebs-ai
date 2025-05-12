@@ -3,11 +3,8 @@ uvicorn
 httpx
 torch
 ultralytics
-flask
-flask-cors
 opencv-python
 numpy
 torchvision
 pillow
-label-studio
 google-cloud-storage

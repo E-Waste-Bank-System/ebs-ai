@@ -28,6 +28,7 @@ __pycache__/
 *.log
 *.csv
 .env
+ebs-cloud-*.json
 
 # IDE specific files
 .vscode/

@@ -5,7 +5,7 @@ from PIL import Image
 import io
 import torch
 import os
-from utils.cloud_storage import CloudStorage
+from src.utils.cloud_storage import CloudStorage
 import tempfile
 import uuid
 import httpx
