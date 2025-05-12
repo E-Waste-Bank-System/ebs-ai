@@ -6,5 +6,7 @@ ultralytics
 opencv-python
 numpy
 torchvision
+python-multipart
+pydantic
 pillow
 google-cloud-storage
