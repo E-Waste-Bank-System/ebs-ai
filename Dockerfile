@@ -16,10 +16,12 @@ COPY . .
 
 RUN mkdir -p runs/detect
 
-ENV MODEL_PATH=models/best.pt
+ENV MODEL_PATH=models/yolo11n.pt
 ENV PORT=8080
 ENV DEBUG=False
 
 EXPOSE 8080
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "120", "app:app"]
+HEALTHCHECK CMD curl --fail http://localhost:8080/ || exit 1
+
+CMD ["uvicorn", "src.core.app:app", "--host", "0.0.0.0", "--port", "8080"]

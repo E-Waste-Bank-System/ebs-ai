@@ -1,7 +1,16 @@
 # Data directories
-src/data/images
-src/data/val
-src/data/labels
+src/data/raw/
+src/data/processed/
+src/data/annotations/
+images_to_add/
+
+# Outputs and results
+outputs/
+runs/
+results/
+
+# Notebooks and test data
+notebooks/test/
 
 # Virtual environment
 /venv/
@@ -16,9 +25,9 @@ __pycache__/
 *.onnx
 
 # Logs and outputs
-runs/
 *.log
 *.csv
+.env
 
 # IDE specific files
 .vscode/

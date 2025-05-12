@@ -1,9 +1,13 @@
+fastapi
+uvicorn
+httpx
+torch
 ultralytics
 flask
 flask-cors
 opencv-python
 numpy
-torch
 torchvision
 pillow
 label-studio
+google-cloud-storage
