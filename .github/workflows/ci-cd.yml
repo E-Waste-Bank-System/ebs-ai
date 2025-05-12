@@ -134,7 +134,7 @@ jobs:
           # Set environment variables for the Cloud Run service
           env_vars: |
             ENABLE_GCS=true
-            GCS_BUCKET=ebs-img-upload
+            GCS_BUCKET=ebs-storage
             MODEL_PATH=models/v3.pt
 
       # If required, use the Cloud Run url output in later steps
