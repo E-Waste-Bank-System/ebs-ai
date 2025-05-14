@@ -1,11 +1,16 @@
 from ultralytics import YOLO
 import os
+import cv2
 
-model = YOLO('runs/detect/train/weights/last.pt')
+model = YOLO('models/v3.pt')
 
-# model.predict(source='src/test/4.jpg', show=True, save=True, project='results', name='webcam_test')
-model.predict(source=2, show=True)
+model.predict(source=2, show=True, conf=0.25)  
 
+while True:
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cv2.destroyAllWindows()
 
 output_dir = 'results/webcam_test'
 for file in os.listdir(output_dir):

@@ -13,7 +13,6 @@ from typing import List, Dict, Any, Optional
 from fastapi import status
 from pydantic import BaseModel, Field
 
-# Try to import YOLO from ultralytics, fallback to placeholder if not available
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
@@ -22,7 +21,6 @@ except ImportError:
 
 app = FastAPI(title="E-Waste YOLOv11 Inference API")
 
-# Allow CORS for local dev
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,20 +29,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load model at startup (update path as needed)
 def get_model_path():
     model_path = os.environ.get('MODEL_PATH', 'models/v3.pt')
     if not os.path.isabs(model_path):
-        # Assume relative to the app root
         model_path = os.path.join(os.getcwd(), model_path)
     return model_path
 
 if YOLO_AVAILABLE:
     model = YOLO(get_model_path())
 else:
-    model = None  # Placeholder
+    model = None  
 
-# Initialize GCS uploader
 cloud_storage = CloudStorage()
 
 class Prediction(BaseModel):
@@ -102,12 +97,3 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
         return {"predictions": predictions, "image_url": public_url}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
-
-# To run: uvicorn core.app:app --reload
-
-# Requirements (add to requirements.txt):
-# fastapi
-# uvicorn
-# torch
-# ultralytics
-# pillow
