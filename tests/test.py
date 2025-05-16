@@ -4,7 +4,7 @@ import cv2
 
 model = YOLO('models/v3.pt')
 
-model.predict(source=2, show=True, conf=0.25)  
+model.predict(source=4, show=True)  
 
 while True:
     if cv2.waitKey(1) & 0xFF == ord('q'):

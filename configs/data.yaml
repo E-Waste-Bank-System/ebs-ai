@@ -1,6 +1,6 @@
-train: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/train/images
-val: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/valid/images
-test: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/test/images
+train: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/processed/train/images
+val: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/processed/valid/images
+test: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/processed/test/images
 
 nc: 38
 names: ['Battery', 'Body Weight Scale', 'Calculator', 'Clock', 'DVD Player', 'DVD ROM', 'Electronic Socket', 'Fan', 'Flashlight', 'Fridge', 'GPU', 'Handphone', 'Harddisk', 'Insect Killer', 'Iron', 'Keyboard', 'Lamp', 'Laptop', 'Laptop Charger', 'Microphone', 'Microwave', 'Monitor', 'Motherboard', 'Mouse', 'PC Case', 'Power Supply', 'Powerbank', 'Printer', 'Printer Ink', 'Radio', 'Rice Cooker', 'Router', 'Solar Panel', 'Speaker', 'Television', 'Toaster', 'Walkie Talkie', 'Washing Machine']
