@@ -56,7 +56,7 @@ def root():
     return {"status": "ok", "message": "YOLOv11 FastAPI is running"}
 
 @app.post(
-    "/predict",
+    "/object",
     response_model=PredictResponse,
     summary="Run YOLOv11 inference on an uploaded image",
     response_description="Predictions and image URL",
@@ -64,11 +64,6 @@ def root():
     tags=["Inference"]
 )
 async def predict(file: UploadFile = File(..., description="Image file (jpg, png, etc.) to run inference on")):
-    """
-    Upload an image and run YOLOv11 inference.
-    - **Request:** multipart/form-data with an image file.
-    - **Response:** List of predictions (class, confidence, bbox) and the public image URL.
-    """
     if not YOLO_AVAILABLE or model is None:
         return JSONResponse(status_code=503, content={"error": "YOLO model not available"})
     try:
@@ -97,3 +92,7 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
         return {"predictions": predictions, "image_url": public_url}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+    
+# @app.post(
+#     "/price",
+# )
