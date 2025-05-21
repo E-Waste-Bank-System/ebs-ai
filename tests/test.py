@@ -37,19 +37,3 @@ for i in range(results.box.nc):  # nc is number of classes
     print(f"  Recall: {r:.3f}")
     print(f"  AP50: {ap50:.3f}")
     print(f"  AP50-95: {ap:.3f}")
-
-# If you still want to test on webcam, you can do that after evaluation
-print("\nStarting webcam test (press 'q' to quit)...")
-model.predict(source=4, show=True)
-
-while True:
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cv2.destroyAllWindows()
-
-# Convert .avi to .mp4 if needed
-output_dir = 'results/webcam_test'
-for file in os.listdir(output_dir):
-    if file.endswith('.avi'):
-        os.rename(os.path.join(output_dir, file), os.path.join(output_dir, file.replace('.avi', '.mp4')))

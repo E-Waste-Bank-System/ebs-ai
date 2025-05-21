@@ -1,10 +1,17 @@
+import os
+import sys
+from pathlib import Path
+
+# Add the project root directory to Python path
+project_root = str(Path(__file__).parent.parent.parent)
+sys.path.append(project_root)
+
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
 import io
 import torch
-import os
 from src.utils.cloud_storage import CloudStorage
 import tempfile
 import uuid
@@ -12,6 +19,87 @@ import httpx
 from typing import List, Dict, Any, Optional
 from fastapi import status
 from pydantic import BaseModel, Field
+
+# Class names mapping for e-waste detection from data.yaml
+CLASS_NAMES = {
+    0: "Air-Conditioner",
+    1: "Bar-Phone",
+    2: "Battery",
+    3: "Blood-Pressure-Monitor",
+    4: "Boiler",
+    5: "CRT-Monitor",
+    6: "CRT-TV",
+    7: "Calculator",
+    8: "Camera",
+    9: "Ceiling-Fan",
+    10: "Christmas-Lights",
+    11: "Clothes-Iron",
+    12: "Coffee-Machine",
+    13: "Compact-Fluorescent-Lamps",
+    14: "Computer-Keyboard",
+    15: "Computer-Mouse",
+    16: "Cooled-Dispenser",
+    17: "Cooling-Display",
+    18: "Dehumidifier",
+    19: "Desktop-PC",
+    20: "Digital-Oscilloscope",
+    21: "Dishwasher",
+    22: "Drone",
+    23: "Electric-Bicycle",
+    24: "Electric-Guitar",
+    25: "Electrocardiograph-Machine",
+    26: "Electronic-Keyboard",
+    27: "Exhaust-Fan",
+    28: "Flashlight",
+    29: "Flat-Panel-Monitor",
+    30: "Flat-Panel-TV",
+    31: "Floor-Fan",
+    32: "Freezer",
+    33: "Glucose-Meter",
+    34: "HDD",
+    35: "Hair-Dryer",
+    36: "Headphone",
+    37: "LED-Bulb",
+    38: "Laptop",
+    39: "Microwave",
+    40: "Music-Player",
+    41: "Neon-Sign",
+    42: "Network-Switch",
+    43: "Non-Cooled-Dispenser",
+    44: "Oven",
+    45: "PCB",
+    46: "Patient-Monitoring-System",
+    47: "Photovoltaic-Panel",
+    48: "PlayStation-5",
+    49: "Power-Adapter",
+    50: "Printer",
+    51: "Projector",
+    52: "Pulse-Oximeter",
+    53: "Range-Hood",
+    54: "Refrigerator",
+    55: "Rotary-Mower",
+    56: "Router",
+    57: "SSD",
+    58: "Server",
+    59: "Smart-Watch",
+    60: "Smartphone",
+    61: "Smoke-Detector",
+    62: "Soldering-Iron",
+    63: "Speaker",
+    64: "Stove",
+    65: "Straight-Tube-Fluorescent-Lamp",
+    66: "Street-Lamp",
+    67: "TV-Remote-Control",
+    68: "Table-Lamp",
+    69: "Tablet",
+    70: "Telephone-Set",
+    71: "Toaster",
+    72: "Tumble-Dryer",
+    73: "USB-Flash-Drive",
+    74: "Vacuum-Cleaner",
+    75: "Washing-Machine",
+    76: "Xbox-Series-X"
+}
 
 try:
     from ultralytics import YOLO
@@ -44,6 +132,7 @@ cloud_storage = CloudStorage()
 
 class Prediction(BaseModel):
     class_: int = Field(..., alias="class", description="Class index of the detected object")
+    class_name: str = Field(..., description="Name of the detected object class")
     confidence: float = Field(..., description="Confidence score of the detection")
     bbox: List[float] = Field(..., description="Bounding box [x1, y1, x2, y2]")
 
@@ -73,6 +162,7 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
         predictions = [
             {
                 "class": int(box.cls),
+                "class_name": CLASS_NAMES.get(int(box.cls), "unknown"),
                 "confidence": float(box.conf),
                 "bbox": [float(x) for x in box.xyxy[0].tolist()]
             }

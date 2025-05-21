@@ -1,13 +1,19 @@
 import os
 import logging
-from google.cloud import storage
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+try:
+    from google.cloud import storage
+    GCS_AVAILABLE = True
+except ImportError:
+    GCS_AVAILABLE = False
+    logger.warning("Google Cloud Storage package not available. Cloud storage features will be disabled.")
+
 class CloudStorage:
     def __init__(self):
-        self.enabled = os.environ.get('ENABLE_GCS', 'false').lower() == 'true'
+        self.enabled = GCS_AVAILABLE and os.environ.get('ENABLE_GCS', 'false').lower() == 'true'
         self.bucket_name = os.environ.get('GCS_BUCKET', '')
         
         if self.enabled:

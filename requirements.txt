@@ -10,4 +10,4 @@ python-multipart
 pydantic
 pillow
 google-cloud-storage
-opencv-python
+google.cloud
