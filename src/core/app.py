@@ -30,7 +30,7 @@ app.add_middleware(
 )
 
 def get_model_path():
-    model_path = os.environ.get('MODEL_PATH', 'models/v3.pt')
+    model_path = os.environ.get('MODEL_PATH', 'models/v4.pt')
     if not os.path.isabs(model_path):
         model_path = os.path.join(os.getcwd(), model_path)
     return model_path

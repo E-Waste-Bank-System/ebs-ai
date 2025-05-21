@@ -24,6 +24,7 @@ yolo*.pt
 *.pth
 *.weights
 *.onnx
+exp10-new/
 
 # Logs and outputs
 *.log
