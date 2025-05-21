@@ -2,6 +2,7 @@
 src/data/raw/
 src/data/processed/
 src/data/annotations/
+src/data/
 images_to_add/
 
 # Outputs and results

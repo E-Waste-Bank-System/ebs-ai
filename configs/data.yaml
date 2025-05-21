@@ -1,13 +1,13 @@
-train: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/processed/train/images
-val: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/processed/valid/images
-test: /home/axldvd/Documents/projects/ebs-system/object-classification-model/src/data/processed/test/images
+train: /home/axldvd/Documents/projects/ebs-ai/src/data/train/images
+val: /home/axldvd/Documents/projects/ebs-ai/src/data/valid/images
+test: /home/axldvd/Documents/projects/ebs-ai/src/data/test/images
 
-nc: 38
-names: ['Battery', 'Body Weight Scale', 'Calculator', 'Clock', 'DVD Player', 'DVD ROM', 'Electronic Socket', 'Fan', 'Flashlight', 'Fridge', 'GPU', 'Handphone', 'Harddisk', 'Insect Killer', 'Iron', 'Keyboard', 'Lamp', 'Laptop', 'Laptop Charger', 'Microphone', 'Microwave', 'Monitor', 'Motherboard', 'Mouse', 'PC Case', 'Power Supply', 'Powerbank', 'Printer', 'Printer Ink', 'Radio', 'Rice Cooker', 'Router', 'Solar Panel', 'Speaker', 'Television', 'Toaster', 'Walkie Talkie', 'Washing Machine']
+nc: 77
+names: ['Air-Conditioner', 'Bar-Phone', 'Battery', 'Blood-Pressure-Monitor', 'Boiler', 'CRT-Monitor', 'CRT-TV', 'Calculator', 'Camera', 'Ceiling-Fan', 'Christmas-Lights', 'Clothes-Iron', 'Coffee-Machine', 'Compact-Fluorescent-Lamps', 'Computer-Keyboard', 'Computer-Mouse', 'Cooled-Dispenser', 'Cooling-Display', 'Dehumidifier', 'Desktop-PC', 'Digital-Oscilloscope', 'Dishwasher', 'Drone', 'Electric-Bicycle', 'Electric-Guitar', 'Electrocardiograph-Machine', 'Electronic-Keyboard', 'Exhaust-Fan', 'Flashlight', 'Flat-Panel-Monitor', 'Flat-Panel-TV', 'Floor-Fan', 'Freezer', 'Glucose-Meter', 'HDD', 'Hair-Dryer', 'Headphone', 'LED-Bulb', 'Laptop', 'Microwave', 'Music-Player', 'Neon-Sign', 'Network-Switch', 'Non-Cooled-Dispenser', 'Oven', 'PCB', 'Patient-Monitoring-System', 'Photovoltaic-Panel', 'PlayStation-5', 'Power-Adapter', 'Printer', 'Projector', 'Pulse-Oximeter', 'Range-Hood', 'Refrigerator', 'Rotary-Mower', 'Router', 'SSD', 'Server', 'Smart-Watch', 'Smartphone', 'Smoke-Detector', 'Soldering-Iron', 'Speaker', 'Stove', 'Straight-Tube-Fluorescent-Lamp', 'Street-Lamp', 'TV-Remote-Control', 'Table-Lamp', 'Tablet', 'Telephone-Set', 'Toaster', 'Tumble-Dryer', 'USB-Flash-Drive', 'Vacuum-Cleaner', 'Washing-Machine', 'Xbox-Series-X']
 
 roboflow:
-  workspace: ebs
-  project: ebs
-  version: 5
+  workspace: electronic-waste-detection
+  project: e-waste-dataset-r0ojc
+  version: 44
   license: CC BY 4.0
-  url: https://universe.roboflow.com/ebs/ebs/dataset/5
+  url: https://universe.roboflow.com/electronic-waste-detection/e-waste-dataset-r0ojc/dataset/44
