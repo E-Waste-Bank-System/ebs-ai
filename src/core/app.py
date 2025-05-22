@@ -132,7 +132,9 @@ class KNRModelManager:
         X_encoded = self.encoder.transform(item_name["Nama Item"])
         return self.model.predict(X_encoded)
 
-    def load(self, model_path='model_knr_best.joblib', encoder_path='encoder_target.joblib'):
+    def load(self, model_path=None, encoder_path=None):
+        model_path = model_path or os.environ.get('KNR_MODEL_PATH', 'knr_models/model_knr_best.joblib')
+        encoder_path = encoder_path or os.environ.get('KNR_ENCODER_PATH', 'knr_models/encoder_target.joblib')
         self.model = joblib.load(model_path)
         self.encoder = joblib.load(encoder_path)
         self.fitted = True
