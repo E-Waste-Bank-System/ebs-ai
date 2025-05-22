@@ -21,6 +21,8 @@ from fastapi import status
 from pydantic import BaseModel, Field
 import joblib
 import pandas as pd
+from category_encoders import TargetEncoder
+from sklearn.neighbors import KNeighborsRegressor
 
 # Class names mapping for e-waste detection from data.yaml
 CLASS_NAMES = {
@@ -119,6 +121,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class KNRModelManager:
+    def __init__(self, encoder=None, model=None):
+        self.encoder = encoder if encoder is not None else TargetEncoder()
+        self.model = model if model is not None else KNeighborsRegressor(n_neighbors=12)
+        self.fitted = False
+
+    def predict(self, item_names):
+        print("predict")
+        item_name = pd.DataFrame([item_names], columns=["Nama Item"])
+        X_encoded = self.encoder.transform(item_name["Nama Item"])
+        return self.model.predict(X_encoded)
+
+    def load(self, model_path='../../model_knr_best.joblib', encoder_path='../../encoder_target.joblib'):
+        self.model = joblib.load(model_path)
+        self.encoder = joblib.load(encoder_path)
+        self.fitted = True
+
 def get_model_path():
     model_path = os.environ.get('MODEL_PATH', 'models/v4.pt')
     if not os.path.isabs(model_path):
@@ -199,10 +218,9 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
 
 async def detect(object: str = Body(..., embed=True)):
     try:
-        encoder = joblib.load('encoder_target.joblib')
-        loaded_model = joblib.load('model_knr_best.joblib')
-        ac_encoded = encoder.transform(pd.DataFrame([object], columns=['Nama Item']))
-        pred = loaded_model.predict(ac_encoded)
+        knr_manager_loaded = KNRModelManager()
+        knr_manager_loaded.load()
+        pred = knr_manager_loaded.predict(object)
         return {"predictions": pred}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
