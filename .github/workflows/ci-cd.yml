@@ -56,7 +56,7 @@ env:
   PROJECT_ID: ebs-cloud-456404 # TODO: update Google Cloud project id
   GAR_LOCATION: asia-southeast2 # TODO: update Artifact Registry location
   REPOSITORY: ebs # TODO: update Artifact Registry repository name
-  SERVICE: ebs-cv # TODO: update Cloud Run service name
+  SERVICE: ebs-ai # TODO: update Cloud Run service name
   REGION: asia-southeast2 # TODO: update Cloud Run service region
 
 jobs:
