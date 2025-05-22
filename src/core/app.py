@@ -133,7 +133,7 @@ class KNRModelManager:
         X_encoded = self.encoder.transform(item_name["Nama Item"])
         return self.model.predict(X_encoded)
 
-    def load(self, model_path='../../model_knr_best.joblib', encoder_path='../../encoder_target.joblib'):
+    def load(self, model_path='model_knr_best.joblib', encoder_path='encoder_target.joblib'):
         self.model = joblib.load(model_path)
         self.encoder = joblib.load(encoder_path)
         self.fitted = True
@@ -170,7 +170,7 @@ def root():
 
 @app.post(
     "/object",
-    response_model=DetectResponse,
+    response_model=PredictResponse,
     summary="Run YOLOv11 inference on an uploaded image",
     response_description="Predictions and image URL",
     status_code=status.HTTP_200_OK,
@@ -209,7 +209,7 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
     
 @app.post(
     "/price",
-    response_model=PredictResponse,
+    response_model=DetectResponse,
     summary="Run KNeighborRegression inference on an e-waste category",
     response_description="Predictions Price",
     status_code=status.HTTP_200_OK,
@@ -218,9 +218,10 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
 
 async def detect(object: str = Body(..., embed=True)):
     try:
+
         knr_manager_loaded = KNRModelManager()
         knr_manager_loaded.load()
         pred = knr_manager_loaded.predict(object)
-        return {"predictions": pred}
+        return {"price": int(pred[0])}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
