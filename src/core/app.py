@@ -6,7 +6,7 @@ from pathlib import Path
 project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
@@ -19,6 +19,8 @@ import httpx
 from typing import List, Dict, Any, Optional
 from fastapi import status
 from pydantic import BaseModel, Field
+import joblib
+import pandas as pd
 
 # Class names mapping for e-waste detection from data.yaml
 CLASS_NAMES = {
@@ -139,14 +141,17 @@ class Prediction(BaseModel):
 class PredictResponse(BaseModel):
     predictions: List[Prediction]
     image_url: Optional[str]
+    
+class DetectResponse(BaseModel):
+    price: int  
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "YOLOv11 FastAPI is running"}
+    return {"status": "ok", "message": "YOLOv11 and KNeighborRegression FastAPI is running, and at your service"}
 
 @app.post(
     "/object",
-    response_model=PredictResponse,
+    response_model=DetectResponse,
     summary="Run YOLOv11 inference on an uploaded image",
     response_description="Predictions and image URL",
     status_code=status.HTTP_200_OK,
@@ -183,6 +188,21 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
     
-# @app.post(
-#     "/price",
-# )
+@app.post(
+    "/price",
+    response_model=PredictResponse,
+    summary="Run KNeighborRegression inference on an e-waste category",
+    response_description="Predictions Price",
+    status_code=status.HTTP_200_OK,
+    tags=["Inference"]
+)
+
+async def detect(object: str = Body(..., embed=True)):
+    try:
+        encoder = joblib.load('encoder_target.joblib')
+        loaded_model = joblib.load('model_knr_best.joblib')
+        ac_encoded = encoder.transform(pd.DataFrame([object], columns=['Nama Item']))
+        pred = loaded_model.predict(ac_encoded)
+        return {"predictions": pred}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
