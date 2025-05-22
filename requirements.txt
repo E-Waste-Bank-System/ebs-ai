@@ -10,4 +10,7 @@ python-multipart
 pydantic
 pillow
 google-cloud-storage
-google.cloud
+category_encoders
+scikit-learn
+pandas
+joblib

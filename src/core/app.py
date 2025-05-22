@@ -24,7 +24,6 @@ import pandas as pd
 from category_encoders import TargetEncoder
 from sklearn.neighbors import KNeighborsRegressor
 
-# Class names mapping for e-waste detection from data.yaml
 CLASS_NAMES = {
     0: "Air-Conditioner",
     1: "Bar-Phone",
