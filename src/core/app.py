@@ -165,6 +165,25 @@ class PredictResponse(BaseModel):
 class DetectResponse(BaseModel):
     price: int  
 
+# Add valid categories from detection controller
+VALID_CATEGORIES = [
+    "AC", "Adaptor /Kilo", "Aki Motor", "Alat Tensi", "Alat Tes Vol", "Ant Miner Case",
+    "Ant Miner Hashboard", "Antena", "Bantal Pemanas", "Baterai Laptop", "Batok Charger",
+    "Blender", "Box Kabel", "Box Speaker Kecil", "Camera", "Catokan", "CCTV", "CD",
+    "Charger Laptop", "Cooler", "DVD Player", "DVD ROM", "Flashdisk", "Game Boy",
+    "Hair Dryer", "Handphone", "Hardisk", "Homic Wireless", "Jam Digital", "Jam Dinding",
+    "Jam Tangan", "Kabel /Kilo", "Kabel Sambungan", "Keyboard", "Kipas", "Komponen CPU",
+    "Komponen Kulkas", "Kompor Listrik", "Lampu", "Laptop", "Magicom", "Mesin Cuci",
+    "Mesin Facial", "Mesin Fax", "Mesin Jahit", "Mesin Kasir", "Mesin Pijat", "Microfon",
+    "Microwave", "Mixer", "Modem", "Monitor", "Motherboard", "Mouse", "Multi Tester",
+    "Neon Box", "Notebook Cooler", "Oven", "Panel Surya", "Pompa Air", "Power Bank",
+    "Power Supply", "Printer", "PS2", "Radio", "Raket Nyamuk", "Remot", "Router",
+    "Saklar Lampu", "Senter", "Seterika", "Solder", "Sound Blaster", "Speaker",
+    "Stabilizer", "Stik Ps", "Stop Kontak", "Tabung Debu", "Teko Listrik", "Telefon",
+    "Timbangan Badan", "Tinta", "TV", "Ultrasonic", "UPS", "Vacum Cleaner", "VGA",
+    "Walkie Talkie", "Wireless Charger"
+]
+
 @app.get("/")
 def root():
     return {"status": "ok", "message": "YOLOv11 and KNeighborRegression FastAPI is running, and at your service"}
@@ -216,9 +235,14 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
     status_code=status.HTTP_200_OK,
     tags=["Inference"]
 )
-
 async def detect(object: str = Body(..., embed=True)):
     try:
+        # Validate if the object category is in our valid categories list
+        if object not in VALID_CATEGORIES:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Invalid category. Must be one of: {', '.join(VALID_CATEGORIES)}"}
+            )
 
         knr_manager_loaded = KNRModelManager()
         knr_manager_loaded.load()
