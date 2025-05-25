@@ -4,4 +4,4 @@ import cv2
 
 model = YOLO('models/v4.pt')
 
-model.predict(source='/home/axldvd/Documents/projects/ebs-ai/src/data/test/images/whirlpool_fwsl_61052_w_7_jpg.rf.0d7400536bcc59130fe569b224b26cc0.jpg', show=True)
+model.predict(source='/home/axldvd/Documents/projects/ebs-ai/src/data/detection_36acd18f-1c77-4a87-b3ab-5b9681104eda.jpg', show=True)

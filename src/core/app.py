@@ -211,6 +211,7 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
                 "bbox": [float(x) for x in box.xyxy[0].tolist()]
             }
             for box in results[0].boxes
+            if float(box.conf) >= 0.5
         ]
         run_id = str(uuid.uuid4())
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
