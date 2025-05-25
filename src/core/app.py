@@ -187,23 +187,18 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
         return JSONResponse(status_code=503, content={"error": "YOLO model not available"})
     try:
         contents = await file.read()
-        
-        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
             tmp.write(contents)
             tmp_path = tmp.name
-        
         try:
-            # Configure model prediction parameters
             results = model.predict(
                 source=tmp_path,
                 show=False,
-                conf=0.5,        # Confidence threshold (0-1)
-                iou=0.3,         # NMS IoU threshold
-                max_det=50,       # Maximum number of detections
-                verbose=True      # Print detection results
-            )
-            
+                conf=0.5,        
+                iou=0.3,        
+                max_det=50,       
+                verbose=True 
+            )    
             predictions = [
                 {
                     "class": int(box.cls),
@@ -229,7 +224,7 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
     except Exception as e:
         logger.error(f"Error in prediction: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
-    
+
 @app.post(
     "/price",
     response_model=DetectResponse,
@@ -240,13 +235,7 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
 )
 async def detect(object: str = Body(..., embed=True)):
     try:
-        # Validate if the object category is in our valid categories list
-        if object not in VALID_CATEGORIES:
-            return JSONResponse(
-                status_code=400,
-                content={"error": f"Invalid category. Must be one of: {', '.join(VALID_CATEGORIES)}"}
-            )
-
+        # Just run the price prediction without category validation
         knr_manager_loaded = KNRModelManager()
         knr_manager_loaded.load()
         pred = knr_manager_loaded.predict(object)
