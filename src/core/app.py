@@ -1,6 +1,11 @@
 import os
 import sys
 from pathlib import Path
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Add the project root directory to Python path
 project_root = str(Path(__file__).parent.parent.parent)
@@ -165,25 +170,6 @@ class PredictResponse(BaseModel):
 class DetectResponse(BaseModel):
     price: int  
 
-# Add valid categories from detection controller
-VALID_CATEGORIES = [
-    "AC", "Adaptor /Kilo", "Aki Motor", "Alat Tensi", "Alat Tes Vol", "Ant Miner Case",
-    "Ant Miner Hashboard", "Antena", "Bantal Pemanas", "Baterai Laptop", "Batok Charger",
-    "Blender", "Box Kabel", "Box Speaker Kecil", "Camera", "Catokan", "CCTV", "CD",
-    "Charger Laptop", "Cooler", "DVD Player", "DVD ROM", "Flashdisk", "Game Boy",
-    "Hair Dryer", "Handphone", "Hardisk", "Homic Wireless", "Jam Digital", "Jam Dinding",
-    "Jam Tangan", "Kabel /Kilo", "Kabel Sambungan", "Keyboard", "Kipas", "Komponen CPU",
-    "Komponen Kulkas", "Kompor Listrik", "Lampu", "Laptop", "Magicom", "Mesin Cuci",
-    "Mesin Facial", "Mesin Fax", "Mesin Jahit", "Mesin Kasir", "Mesin Pijat", "Microfon",
-    "Microwave", "Mixer", "Modem", "Monitor", "Motherboard", "Mouse", "Multi Tester",
-    "Neon Box", "Notebook Cooler", "Oven", "Panel Surya", "Pompa Air", "Power Bank",
-    "Power Supply", "Printer", "PS2", "Radio", "Raket Nyamuk", "Remot", "Router",
-    "Saklar Lampu", "Senter", "Seterika", "Solder", "Sound Blaster", "Speaker",
-    "Stabilizer", "Stik Ps", "Stop Kontak", "Tabung Debu", "Teko Listrik", "Telefon",
-    "Timbangan Badan", "Tinta", "TV", "Ultrasonic", "UPS", "Vacum Cleaner", "VGA",
-    "Walkie Talkie", "Wireless Charger"
-]
-
 @app.get("/")
 def root():
     return {"status": "ok", "message": "YOLOv11 and KNeighborRegression FastAPI is running, and at your service"}
@@ -201,31 +187,47 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
         return JSONResponse(status_code=503, content={"error": "YOLO model not available"})
     try:
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
-        results = model(image)
-        predictions = [
-            {
-                "class": int(box.cls),
-                "class_name": CLASS_NAMES.get(int(box.cls), "unknown"),
-                "confidence": float(box.conf),
-                "bbox": [float(x) for x in box.xyxy[0].tolist()]
-            }
-            for box in results[0].boxes
-            if float(box.conf) >= 0.5
-        ]
-        run_id = str(uuid.uuid4())
+        
+        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            image.save(tmp.name, format='JPEG')
+            tmp.write(contents)
             tmp_path = tmp.name
-        public_url = None
+        
         try:
-            public_url = cloud_storage.upload_detection_result(tmp_path, run_id)
-        except Exception:
+            # Configure model prediction parameters
+            results = model.predict(
+                source=tmp_path,
+                show=False,
+                conf=0.5,        # Confidence threshold (0-1)
+                iou=0.3,         # NMS IoU threshold
+                max_det=50,       # Maximum number of detections
+                verbose=True      # Print detection results
+            )
+            
+            predictions = [
+                {
+                    "class": int(box.cls),
+                    "class_name": CLASS_NAMES[int(box.cls)],
+                    "confidence": float(box.conf),
+                    "bbox": [float(x) for x in box.xyxy[0].tolist()]
+                }
+                for box in results[0].boxes
+            ]
+            
+            run_id = str(uuid.uuid4())
             public_url = None
+            try:
+                public_url = cloud_storage.upload_detection_result(tmp_path, run_id)
+            except Exception as e:
+                logger.error(f"Failed to upload detection result: {str(e)}")
+                public_url = None
+                
+            return {"predictions": predictions, "image_url": public_url}
         finally:
             os.remove(tmp_path)
-        return {"predictions": predictions, "image_url": public_url}
+            
     except Exception as e:
+        logger.error(f"Error in prediction: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
     
 @app.post(
