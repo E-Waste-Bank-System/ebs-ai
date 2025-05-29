@@ -194,9 +194,6 @@ async def predict(file: UploadFile = File(..., description="Image file (jpg, png
             results = model.predict(
                 source=tmp_path,
                 show=False,
-                conf=0.25,        # Increased confidence threshold for better accuracy
-                iou=0.45,         # Increased IoU threshold to allow more overlapping detections
-                max_det=50,       # Maximum number of detections
                 verbose=True 
             )    
             predictions = [

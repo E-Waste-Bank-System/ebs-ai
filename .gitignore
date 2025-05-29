@@ -6,6 +6,7 @@ src/data/
 images_to_add/
 
 # Outputs and results
+tests/*.jpg
 outputs/
 runs/
 results/

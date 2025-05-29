@@ -12,11 +12,8 @@ model = YOLO('models/v4.pt')
 
 # Configure model prediction parameters
 results = model.predict(
-    source='/home/axldvd/Documents/projects/ebs-ai/tests/detection_0a017e45-5507-49b9-b99d-559f5b2739c2.jpg',
-    show=True,
-    conf=0.25,       # Increased confidence threshold for better accuracy
-    iou=0.45,        # Increased IoU threshold to allow more overlapping detections
-    max_det=50,      # Maximum number of detections
+    source='/home/axldvd/Documents/projects/ebs/ebs-ai/tests/multiple.jpg',
+    show=True, 
     verbose=True     # Print detection results
 )
 
