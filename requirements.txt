@@ -10,7 +10,9 @@ python-multipart
 pydantic
 pillow
 google-cloud-storage
+google-generativeai
 category_encoders
 scikit-learn
 pandas
 joblib
+python-dotenv

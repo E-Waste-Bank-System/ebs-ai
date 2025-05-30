@@ -1,122 +1,31 @@
-import os
+"""
+Main FastAPI Application
+Simplified and modular e-waste detection API
+"""
+
 import sys
 from pathlib import Path
-import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Add the project root directory to Python path
+# Add project root to Python path
 project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
 
-from fastapi import FastAPI, File, UploadFile, Body
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from PIL import Image
-import io
-import torch
-from src.utils.cloud_storage import CloudStorage
-import tempfile
-import uuid
-import httpx
-from typing import List, Dict, Any, Optional
-from fastapi import status
-from pydantic import BaseModel, Field
-import joblib
-import pandas as pd
-from category_encoders import TargetEncoder
-from sklearn.neighbors import KNeighborsRegressor
 
-CLASS_NAMES = {
-    0: "Air-Conditioner",
-    1: "Bar-Phone",
-    2: "Battery",
-    3: "Blood-Pressure-Monitor",
-    4: "Boiler",
-    5: "CRT-Monitor",
-    6: "CRT-TV",
-    7: "Calculator",
-    8: "Camera",
-    9: "Ceiling-Fan",
-    10: "Christmas-Lights",
-    11: "Clothes-Iron",
-    12: "Coffee-Machine",
-    13: "Compact-Fluorescent-Lamps",
-    14: "Computer-Keyboard",
-    15: "Computer-Mouse",
-    16: "Cooled-Dispenser",
-    17: "Cooling-Display",
-    18: "Dehumidifier",
-    19: "Desktop-PC",
-    20: "Digital-Oscilloscope",
-    21: "Dishwasher",
-    22: "Drone",
-    23: "Electric-Bicycle",
-    24: "Electric-Guitar",
-    25: "Electrocardiograph-Machine",
-    26: "Electronic-Keyboard",
-    27: "Exhaust-Fan",
-    28: "Flashlight",
-    29: "Flat-Panel-Monitor",
-    30: "Flat-Panel-TV",
-    31: "Floor-Fan",
-    32: "Freezer",
-    33: "Glucose-Meter",
-    34: "HDD",
-    35: "Hair-Dryer",
-    36: "Headphone",
-    37: "LED-Bulb",
-    38: "Laptop",
-    39: "Microwave",
-    40: "Music-Player",
-    41: "Neon-Sign",
-    42: "Network-Switch",
-    43: "Non-Cooled-Dispenser",
-    44: "Oven",
-    45: "PCB",
-    46: "Patient-Monitoring-System",
-    47: "Photovoltaic-Panel",
-    48: "PlayStation-5",
-    49: "Power-Adapter",
-    50: "Printer",
-    51: "Projector",
-    52: "Pulse-Oximeter",
-    53: "Range-Hood",
-    54: "Refrigerator",
-    55: "Rotary-Mower",
-    56: "Router",
-    57: "SSD",
-    58: "Server",
-    59: "Smart-Watch",
-    60: "Smartphone",
-    61: "Smoke-Detector",
-    62: "Soldering-Iron",
-    63: "Speaker",
-    64: "Stove",
-    65: "Straight-Tube-Fluorescent-Lamp",
-    66: "Street-Lamp",
-    67: "TV-Remote-Control",
-    68: "Table-Lamp",
-    69: "Tablet",
-    70: "Telephone-Set",
-    71: "Toaster",
-    72: "Tumble-Dryer",
-    73: "USB-Flash-Drive",
-    74: "Vacuum-Cleaner",
-    75: "Washing-Machine",
-    76: "Xbox-Series-X"
-}
+from src.config.settings import API_TITLE, API_DESCRIPTION, API_VERSION, HOST, PORT
+from src.services.detection_service import DetectionService
+from src.models.response_models import FullResponse, ObjectResponse, PriceResponse
 
-try:
-    from ultralytics import YOLO
-    YOLO_AVAILABLE = True
-except ImportError:
-    YOLO_AVAILABLE = False
+# Initialize FastAPI app
+app = FastAPI(
+    title=API_TITLE,
+    description=API_DESCRIPTION,
+    version=API_VERSION
+)
 
-app = FastAPI(title="E-Waste YOLOv11 Inference API")
-
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -125,117 +34,127 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class KNRModelManager:
-    def __init__(self, encoder=None, model=None):
-        self.encoder = encoder if encoder is not None else TargetEncoder()
-        self.model = model if model is not None else KNeighborsRegressor(n_neighbors=12)
-        self.fitted = False
+# Initialize detection service
+detection_service = None
 
-    def predict(self, item_names):
-        print("predict")
-        item_name = pd.DataFrame([item_names], columns=["Nama Item"])
-        X_encoded = self.encoder.transform(item_name["Nama Item"])
-        return self.model.predict(X_encoded)
+@app.on_event("startup")
+async def startup_event():
+    """Initialize detection service on startup"""
+    global detection_service
+    detection_service = DetectionService()
 
-    def load(self, model_path=None, encoder_path=None):
-        model_path = model_path or os.environ.get('KNR_MODEL_PATH', 'knr_models/model_knr_best.joblib')
-        encoder_path = encoder_path or os.environ.get('KNR_ENCODER_PATH', 'knr_models/encoder_target.joblib')
-        self.model = joblib.load(model_path)
-        self.encoder = joblib.load(encoder_path)
-        self.fitted = True
-
-def get_model_path():
-    model_path = os.environ.get('MODEL_PATH', 'models/v4.pt')
-    if not os.path.isabs(model_path):
-        model_path = os.path.join(os.getcwd(), model_path)
-    return model_path
-
-if YOLO_AVAILABLE:
-    model = YOLO(get_model_path())
-else:
-    model = None  
-
-cloud_storage = CloudStorage()
-
-class Prediction(BaseModel):
-    class_: int = Field(..., alias="class", description="Class index of the detected object")
-    class_name: str = Field(..., description="Name of the detected object class")
-    confidence: float = Field(..., description="Confidence score of the detection")
-    bbox: List[float] = Field(..., description="Bounding box [x1, y1, x2, y2]")
-
-class PredictResponse(BaseModel):
-    predictions: List[Prediction]
-    image_url: Optional[str]
-    
-class DetectResponse(BaseModel):
-    price: int  
+# API Endpoints
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "YOLOv11 and KNeighborRegression FastAPI is running, and at your service"}
+    """Health check and system status"""
+    status = detection_service.get_system_status() if detection_service else {}
+    return {
+        "status": "ok", 
+        "message": "E-Waste Detection API is running",
+        "version": API_VERSION,
+        "endpoints": ["/predict", "/object", "/price"],
+        "system_status": status
+    }
+
+@app.post(
+    "/predict",
+    response_model=FullResponse,
+    summary="Complete e-waste analysis with YOLO, pricing, and RAG",
+    tags=["Complete Analysis"]
+)
+async def predict(file: UploadFile = File(..., description="Image file for complete analysis")):
+    """
+    Complete e-waste analysis including:
+    - YOLO object detection
+    - Category mapping and validation
+    - Gemini AI validation and correction
+    - Price prediction
+    - RAG-based disposal guidance
+    """
+    if not detection_service:
+        raise HTTPException(status_code=503, detail="Detection service not initialized")
+    
+    try:
+        contents = await file.read()
+        result = await detection_service.process_image_complete(contents)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 @app.post(
     "/object",
-    response_model=PredictResponse,
-    summary="Run YOLOv11 inference on an uploaded image",
-    response_description="Predictions and image URL",
-    status_code=status.HTTP_200_OK,
-    tags=["Inference"]
+    response_model=ObjectResponse,
+    summary="YOLO object detection only",
+    tags=["Object Detection"]
 )
-async def predict(file: UploadFile = File(..., description="Image file (jpg, png, etc.) to run inference on")):
-    if not YOLO_AVAILABLE or model is None:
-        return JSONResponse(status_code=503, content={"error": "YOLO model not available"})
+async def detect_objects(file: UploadFile = File(..., description="Image file for object detection")):
+    """
+    YOLO object detection only - returns detected objects with bounding boxes
+    No category mapping, validation, or price prediction
+    """
+    if not detection_service:
+        raise HTTPException(status_code=503, detail="Detection service not initialized")
+    
     try:
         contents = await file.read()
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            tmp.write(contents)
-            tmp_path = tmp.name
-        try:
-            results = model.predict(
-                source=tmp_path,
-                show=False,
-                verbose=True 
-            )    
-            predictions = [
-                {
-                    "class": int(box.cls),
-                    "class_name": CLASS_NAMES[int(box.cls)],
-                    "confidence": float(box.conf),
-                    "bbox": [float(x) for x in box.xyxy[0].tolist()]
-                }
-                for box in results[0].boxes
-            ]
-            
-            run_id = str(uuid.uuid4())
-            public_url = None
-            try:
-                public_url = cloud_storage.upload_detection_result(tmp_path, run_id)
-            except Exception as e:
-                logger.error(f"Failed to upload detection result: {str(e)}")
-                public_url = None
-                
-            return {"predictions": predictions, "image_url": public_url}
-        finally:
-            os.remove(tmp_path)
-            
+        result = await detection_service.detect_objects_only(contents)
+        return result
     except Exception as e:
-        logger.error(f"Error in prediction: {str(e)}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        raise HTTPException(status_code=500, detail=f"Detection error: {str(e)}")
 
 @app.post(
     "/price",
-    response_model=DetectResponse,
-    summary="Run KNeighborRegression inference on an e-waste category",
-    response_description="Predictions Price",
-    status_code=status.HTTP_200_OK,
-    tags=["Inference"]
+    response_model=PriceResponse,
+    summary="Price prediction only",
+    tags=["Price Prediction"]
 )
-async def detect(object: str = Body(..., embed=True)):
-    try:
-        # Just run the price prediction without category validation
-        knr_manager_loaded = KNRModelManager()
-        knr_manager_loaded.load()
-        pred = knr_manager_loaded.predict(object)
-        return {"price": int(pred[0])}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+async def predict_price(category: str):
+    """
+    Price prediction only - given a category name, return estimated price
+    Uses the 33 supported price categories only
+    """
+    if not detection_service:
+        raise HTTPException(status_code=503, detail="Detection service not initialized")
+    
+    # Validate category
+    supported_categories = detection_service.get_supported_categories()
+    if category not in supported_categories:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid category: {category}",
+                "supported_categories": supported_categories,
+                "note": "This endpoint only accepts the 33 price model categories"
+            }
+        )
+    
+    result = detection_service.predict_price_only(category)
+    if result is None:
+        raise HTTPException(status_code=500, detail="Price prediction failed")
+    
+    return result
+
+@app.get("/categories")
+def get_supported_categories():
+    """Get list of supported price prediction categories"""
+    if not detection_service:
+        return {"categories": [], "count": 0}
+    
+    categories = detection_service.get_supported_categories()
+    return {
+        "categories": categories,
+        "count": len(categories)
+    }
+
+@app.get("/status")
+def get_system_status():
+    """Get detailed system status"""
+    if not detection_service:
+        return {"error": "Detection service not initialized"}
+    
+    return detection_service.get_system_status()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host=HOST, port=PORT)
