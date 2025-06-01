@@ -25,7 +25,7 @@ ENCODER_PATH = os.path.join(MODELS_DIR, "encoder_target.joblib")
 
 # API Configuration
 API_TITLE = "E-Waste Detection API"
-API_DESCRIPTION = "Production API for e-waste detection with YOLO, pricing, and RAG functionality"
+API_DESCRIPTION = "Production API for e-waste detection with YOLO, pricing"
 API_VERSION = "1.0.0"
 HOST = "0.0.0.0"
 PORT = 8080
@@ -33,9 +33,10 @@ PORT = 8080
 # Gemini Configuration
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash-preview-05-20'
-GEMINI_MAX_TOKENS = 1000
+GEMINI_MAX_TOKENS = 3000
 GEMINI_TEMPERATURE = 0.3
 GEMINI_TOP_P = 0.9
+GEMINI_MAX_WORKERS = int(os.environ.get('GEMINI_MAX_WORKERS', '10'))  # Default to 3 workers
 
 # Detection thresholds
 LOW_CONFIDENCE_THRESHOLD = 0.5

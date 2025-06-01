@@ -32,7 +32,7 @@ class FullPrediction(BaseModel):
     confidence: float = Field(..., description="Detection confidence")
     regression_result: Optional[int] = Field(None, description="Price prediction")
     description: str = Field(..., description="Visual description of e-waste item (max 20 words)")
-    validation_feedback: Optional[str] = Field(None, description="Gemini validation feedback")
+    bbox: List[float] = Field(..., description="Bounding box coordinates")
     suggestion: List[str] = Field(..., description="Disposal suggestions")
     risk_lvl: int = Field(..., description="Risk level 1-5")
     detection_source: str = Field(..., description="YOLO, Gemini Interfered, or Rejected")
@@ -41,7 +41,6 @@ class FullPrediction(BaseModel):
 class FullResponse(BaseModel):
     """Complete analysis response"""
     predictions: List[FullPrediction] = Field(..., description="Complete predictions")
-    rag_summary: Optional[str] = Field(None, description="RAG-generated summary")
 
 
 class ValidationResult(BaseModel):

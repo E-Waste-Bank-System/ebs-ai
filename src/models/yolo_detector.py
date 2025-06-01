@@ -43,31 +43,25 @@ class YOLODetector:
             logger.error(f"Error loading YOLO model: {str(e)}")
             return False
     
-    def detect_objects(self, image_path: str) -> List[Detection]:
+    def detect_objects(self, image_path: str, save_annotated_path: str = None) -> List[Detection]:
         """
         Detect objects in image using YOLO
-        
-        Args:
-            image_path: Path to image file
-            
-        Returns:
-            List of Detection objects
+        Optionally save annotated image using Ultralytics' built-in method.
         """
         if not self.is_loaded or self.model is None:
             logger.error("YOLO model not loaded")
             return []
-        
         try:
             # Run YOLO prediction
             results = self.model.predict(source=image_path, show=False, verbose=False)
-            
+            if save_annotated_path:
+                results[0].save(filename=save_annotated_path)
             detections = []
             for box in results[0].boxes:
                 class_idx = int(box.cls)
                 class_name = CLASS_NAMES[class_idx]
                 confidence = float(box.conf)
                 bbox = [float(x) for x in box.xyxy[0].tolist()]
-                
                 detection = Detection(
                     id=generate_unique_id(),
                     category=class_name,
@@ -75,10 +69,8 @@ class YOLODetector:
                     bbox=bbox
                 )
                 detections.append(detection)
-            
             logger.info(f"YOLO detected {len(detections)} objects")
             return detections
-            
         except Exception as e:
             logger.error(f"Error in YOLO detection: {str(e)}")
             return []

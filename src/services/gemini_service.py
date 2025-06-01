@@ -1,6 +1,6 @@
 """
 Gemini AI Service Module
-Handles RAG (Retrieval-Augmented Generation) and validation using Google's Gemini
+Handles validation using Google's Gemini
 """
 
 import json
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiService:
-    """Gemini AI Service for RAG and validation"""
+    """Gemini AI Service for validation"""
     
     def __init__(self):
         self.model = None
@@ -38,18 +38,12 @@ class GeminiService:
         self, 
         image_path: str, 
         yolo_prediction: str, 
-        mapped_category: str
+        mapped_category: str,
+        extra_image_path: str = None,
+        prompt_context: dict = None
     ) -> ValidationResult:
         """
-        Validate YOLO detection using Gemini vision
-        
-        Args:
-            image_path: Path to image file
-            yolo_prediction: Original YOLO prediction
-            mapped_category: Category mapped from YOLO to price model
-            
-        Returns:
-            ValidationResult with validation outcome
+        Validate YOLO detection using Gemini vision, with optional extra image and context.
         """
         if not self.is_available or self.model is None:
             logger.warning("Gemini not available, using YOLO prediction")
@@ -59,24 +53,57 @@ class GeminiService:
                 detection_source="YOLO",
                 gemini_feedback="Gemini validation unavailable"
             )
-        
         try:
-            # Load and process image
-            image = Image.open(image_path)
-            
-            # Create validation prompt
-            prompt = self._create_validation_prompt(yolo_prediction, mapped_category)
-            
-            # Get Gemini response
+            images = [Image.open(image_path)]
+            if extra_image_path:
+                images.append(Image.open(extra_image_path))
+            # Build prompt
+            if prompt_context:
+                all_dets = prompt_context.get("all_detections", [])
+                focus_bbox = prompt_context.get("focus_bbox")
+                focus_label = prompt_context.get("focus_label")
+                prompt = f"""
+Analyze the provided images. The first image shows all detected objects with bounding boxes and labels. The second image (if present) is a crop of the object to focus on.
+
+All detected objects:
+{json.dumps(all_dets, ensure_ascii=False)}
+
+Focus only on the object with label '{focus_label}' and bounding box {focus_bbox}.
+
+YOLO Prediction: {yolo_prediction}
+Mapped Category: {mapped_category}
+
+Your task:
+1. Identify the main e-waste object in the focus region
+2. Determine if it matches the mapped category: "{mapped_category}"
+3. If incorrect, suggest the best matching category from this list: {', '.join(PRICE_CATEGORIES)}
+
+Respond in this exact JSON format:
+{{
+    "object_identified": "description of what you see",
+    "is_category_correct": true/false,
+    "correct_category": "category name from the list or null if correct",
+    "confidence": 0.0-1.0,
+    "reasoning": "brief explanation"
+}}
+
+Important:
+- Only use categories from the provided list
+- Be precise about object identification
+- Focus only on the object in the focus region
+- Maximum {GEMINI_MAX_TOKENS} tokens in response
+"""
+            else:
+                prompt = self._create_validation_prompt(yolo_prediction, mapped_category)
+            # Gemini call
             response = self.model.generate_content(
-                [prompt, image],
+                [prompt] + images,
                 generation_config={
                     "max_output_tokens": GEMINI_MAX_TOKENS,
                     "temperature": GEMINI_TEMPERATURE,
                     "top_p": GEMINI_TOP_P
                 }
             )
-            
             if not response.text:
                 logger.warning("Empty Gemini response")
                 return ValidationResult(
@@ -85,12 +112,9 @@ class GeminiService:
                     detection_source="YOLO",
                     gemini_feedback="Gemini validation failed - empty response"
                 )
-            
-            # Parse and process response
             return self._process_validation_response(
                 response.text, mapped_category, yolo_prediction
             )
-            
         except Exception as e:
             logger.error(f"Gemini validation error: {str(e)}")
             return ValidationResult(
@@ -99,47 +123,152 @@ class GeminiService:
                 detection_source="YOLO",
                 gemini_feedback=f"Gemini validation error: {str(e)}"
             )
-    
-    async def generate_disposal_summary(self, detected_items: List[str]) -> str:
+
+    async def generate_description(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> str:
         """
-        Generate RAG summary for disposal guidance
-        
-        Args:
-            detected_items: List of detected e-waste items
-            
-        Returns:
-            Disposal guidance summary in Indonesian
+        Generate concise description (10-15 words) using Gemini vision based on e-waste condition, with optional extra image and context.
         """
-        if not self.is_available or not detected_items:
-            return "Silakan bawa e-waste ke fasilitas daur ulang bersertifikat."
-        
+        if not self.is_available or self.model is None:
+            return f"Perangkat elektronik {category.lower()}"
         try:
-            prompt = f"""
-            Berikan panduan singkat disposal untuk e-waste items berikut: {', '.join(detected_items)}
-            
-            Fokus pada:
-            1. Cara disposal yang aman dan ramah lingkungan
-            2. Persiapan sebelum disposal (hapus data, lepas battery, dll)
-            3. Tempat disposal yang tepat di Indonesia
-            4. Dampak lingkungan jika tidak di-disposal dengan benar
-            
-            Jawab dalam bahasa Indonesia, maksimal 200 kata.
-            """
-            
+            images = [Image.open(image_path)]
+            if extra_image_path:
+                images.append(Image.open(extra_image_path))
+            if prompt_context:
+                all_dets = prompt_context.get("all_detections", [])
+                focus_bbox = prompt_context.get("focus_bbox")
+                focus_label = prompt_context.get("focus_label")
+                prompt = f"""
+Analisis kondisi e-waste pada gambar. Gambar pertama berisi semua deteksi dengan bounding box dan label. Gambar kedua (jika ada) adalah crop dari objek fokus.
+
+Semua deteksi:
+{json.dumps(all_dets, ensure_ascii=False)}
+
+Fokus hanya pada objek dengan label '{focus_label}' dan bounding box {focus_bbox}.
+
+Kategori: {category}
+
+Buat deskripsi singkat (maksimal 15 kata) dalam Bahasa Indonesia, fokus pada kondisi aktual perangkat di area fokus.
+"""
+            else:
+                prompt = f"""
+Analisis kondisi e-waste ini dan buat deskripsi singkat (10-15 kata) dalam Bahasa Indonesia.
+Kategori: {category}
+
+Fokus pada:
+1. Kondisi fisik (rusak/utuh/berkarat/dll)
+2. Usia dan model (jika terlihat)
+3. Komponen yang terlihat
+4. Kerusakan spesifik (jika ada)
+
+Deskripsi harus:
+- Jelas dan informatif
+- Maksimal 15 kata
+- Dalam Bahasa Indonesia
+- Fokus pada kondisi aktual perangkat
+- Sertakan detail spesifik yang terlihat
+
+Contoh format yang diharapkan:
+"Laptop Dell Latitude dengan layar retak dan keyboard aus"
+"Smartphone Samsung dengan casing retak dan layar bergaris"
+"Monitor LG dengan bezel hitam dan port HDMI terlihat"
+"""
             response = self.model.generate_content(
-                prompt,
+                [prompt] + images,
                 generation_config={
-                    "max_output_tokens": GEMINI_MAX_TOKENS,
-                    "temperature": GEMINI_TEMPERATURE,
-                    "top_p": GEMINI_TOP_P
+                    "max_output_tokens": 3000,
+                    "temperature": 0.3,
+                    "top_p": 0.8
                 }
             )
-            
-            return response.text.strip()
-            
+            if response.text:
+                return response.text.strip()
+            return f"Perangkat elektronik {category.lower()}"
         except Exception as e:
-            logger.error(f"RAG generation error: {str(e)}")
-            return "Silakan disposal e-waste items ke fasilitas daur ulang bersertifikat untuk melindungi lingkungan."
+            logger.error(f"Gemini description error: {str(e)}")
+            return f"Perangkat elektronik {category.lower()}"
+
+    async def generate_suggestions(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> List[str]:
+        """
+        Generate disposal suggestions using Gemini vision based on e-waste condition, with optional extra image and context.
+        """
+        default_suggestions = [
+            "Periksa panduan manufacturer",
+            "Pisahkan komponen berbahaya",
+            "Bawa ke pusat daur ulang e-waste"
+        ]
+        if not self.is_available or self.model is None:
+            return default_suggestions
+        try:
+            images = [Image.open(image_path)]
+            if extra_image_path:
+                images.append(Image.open(extra_image_path))
+            if prompt_context:
+                all_dets = prompt_context.get("all_detections", [])
+                focus_bbox = prompt_context.get("focus_bbox")
+                focus_label = prompt_context.get("focus_label")
+                prompt = f"""
+Analisis kondisi e-waste pada gambar. Gambar pertama berisi semua deteksi dengan bounding box dan label. Gambar kedua (jika ada) adalah crop dari objek fokus.
+
+Semua deteksi:
+{json.dumps(all_dets, ensure_ascii=False)}
+
+Fokus hanya pada objek dengan label '{focus_label}' dan bounding box {focus_bbox}.
+
+Kategori: {category}
+
+Buat 3 langkah penanganan spesifik untuk objek di area fokus, maksimal 10 kata per langkah, dalam Bahasa Indonesia.
+"""
+            else:
+                prompt = f"""
+Analisis kondisi e-waste ini dan buat 3 langkah penanganan dalam Bahasa Indonesia.
+Kategori: {category}
+
+Langkah-langkah harus:
+1. Spesifik untuk kondisi perangkat yang terlihat
+2. Fokus pada keamanan dan lingkungan
+3. Mudah diikuti
+4. Maksimal 10 kata per langkah
+5. Dalam Bahasa Indonesia
+
+Format:
+1. [Langkah pertama]
+2. [Langkah kedua]
+3. [Langkah ketiga]
+
+Contoh untuk perangkat rusak:
+1. Pisahkan komponen yang rusak dengan hati-hati
+2. Simpan bagian yang masih berfungsi
+3. Bawa ke pusat daur ulang e-waste
+
+Contoh untuk perangkat utuh:
+1. Backup dan hapus data dengan aman
+2. Lepas komponen yang bisa dilepas
+3. Bawa ke pusat daur ulang e-waste
+"""
+            response = self.model.generate_content(
+                [prompt] + images,
+                generation_config={
+                    "max_output_tokens": 3000,
+                    "temperature": 0.3,
+                    "top_p": 0.8
+                }
+            )
+            if response.text:
+                # Parse numbered list
+                suggestions = []
+                for line in response.text.strip().split('\n'):
+                    if line.strip() and any(line.strip().startswith(str(i)) for i in range(1, 10)):
+                        suggestion = line.split('.', 1)[1].strip()
+                        suggestions.append(suggestion)
+                # Fill with defaults if fewer than 3
+                while len(suggestions) < 3:
+                    suggestions.append(default_suggestions[len(suggestions)])
+                return suggestions[:3]
+            return default_suggestions
+        except Exception as e:
+            logger.error(f"Gemini suggestions error: {str(e)}")
+            return default_suggestions
     
     def _create_validation_prompt(self, yolo_prediction: str, mapped_category: str) -> str:
         """Create validation prompt for Gemini"""
