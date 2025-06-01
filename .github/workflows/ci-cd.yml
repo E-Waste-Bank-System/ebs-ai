@@ -50,7 +50,7 @@ name: Build and Deploy to Cloud Run
 on:
   push:
     branches:
-      - main # TODO: update branch name if required
+      - beta # TODO: update branch name if required
 
 env:
   PROJECT_ID: ebs-cloud-456404 # TODO: update Google Cloud project id
