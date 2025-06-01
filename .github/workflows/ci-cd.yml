@@ -134,6 +134,7 @@ jobs:
             ENABLE_GCS=true
             GCS_BUCKET=ebs-storage
             MODEL_PATH=models/v4.pt
+            GEMINI_API_KEY=AIzaSyBI-WX9MQaiWyMwmwHoZS48gNu0e9Pu6P0
             KNR_MODEL_PATH=/app/knr_models/model_knr_best.joblib
             KNR_ENCODER_PATH=/app/knr_models/encoder_target.joblib
 
