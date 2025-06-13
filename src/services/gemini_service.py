@@ -5,7 +5,7 @@ Handles validation using Google's Gemini
 
 import json
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from PIL import Image
 
 from src.config.settings import (
@@ -270,6 +270,70 @@ Contoh untuk perangkat utuh:
             logger.error(f"Gemini suggestions error: {str(e)}")
             return default_suggestions
     
+    async def analyze_damage_level(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> Tuple[int, str]:
+        """
+        Analyze damage level of e-waste using Gemini vision.
+        Returns damage level (1-5) and detailed analysis.
+        """
+        if not self.is_available or self.model is None:
+            return 3, "Damage analysis unavailable"
+        
+        try:
+            images = [Image.open(image_path)]
+            if extra_image_path:
+                images.append(Image.open(extra_image_path))
+            
+            prompt = f"""
+Analyze the physical condition of this e-waste item.
+Category: {category}
+
+Assess the following aspects:
+1. Physical damage (scratches, dents, cracks)
+2. Component condition (missing parts, loose connections)
+3. Wear and tear (age-related deterioration)
+4. Functionality indicators (power ports, buttons, screens)
+5. Overall appearance
+
+Rate the damage level from 1 to 5:
+1 = Excellent condition (like new, minimal wear)
+2 = Good condition (minor wear, fully functional)
+3 = Fair condition (visible wear, some damage)
+4 = Poor condition (significant damage, may not function)
+5 = Severe damage (extensive damage, non-functional)
+
+Respond in this exact JSON format:
+{{
+    "damage_level": 1-5,
+    "analysis": "Detailed analysis of the damage",
+    "key_issues": ["List of main issues found"]
+}}
+"""
+            response = self.model.generate_content(
+                [prompt] + images,
+                generation_config={
+                    "max_output_tokens": GEMINI_MAX_TOKENS,
+                    "temperature": GEMINI_TEMPERATURE,
+                    "top_p": GEMINI_TOP_P
+                }
+            )
+            
+            if not response.text:
+                return 3, "Damage analysis failed - empty response"
+            
+            # Parse response
+            try:
+                result = json.loads(response.text.strip())
+                damage_level = int(result.get("damage_level", 3))
+                analysis = result.get("analysis", "No detailed analysis available")
+                return damage_level, analysis
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error(f"Failed to parse damage analysis response: {e}")
+                return 3, "Damage analysis parsing failed"
+                
+        except Exception as e:
+            logger.error(f"Damage analysis error: {str(e)}")
+            return 3, f"Damage analysis error: {str(e)}"
+    
     def _create_validation_prompt(self, yolo_prediction: str, mapped_category: str) -> str:
         """Create validation prompt for Gemini"""
         return f"""
@@ -282,6 +346,7 @@ Your task:
 1. Identify the main e-waste object in this image
 2. Determine if it matches the mapped category: "{mapped_category}"
 3. If incorrect, suggest the best matching category from this list: {', '.join(PRICE_CATEGORIES)}
+4. Assess the physical condition and damage level (1-5)
 
 Respond in this exact JSON format:
 {{
@@ -289,7 +354,9 @@ Respond in this exact JSON format:
     "is_category_correct": true/false,
     "correct_category": "category name from the list or null if correct",
     "confidence": 0.0-1.0,
-    "reasoning": "brief explanation"
+    "reasoning": "brief explanation",
+    "damage_level": 1-5,
+    "damage_analysis": "brief analysis of physical condition"
 }}
 
 Important: 

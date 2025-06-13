@@ -35,6 +35,7 @@ class FullPrediction(BaseModel):
     bbox: List[float] = Field(..., description="Bounding box coordinates")
     suggestion: List[str] = Field(..., description="Disposal suggestions")
     risk_lvl: int = Field(..., description="Risk level 1-5")
+    damage_level: int = Field(..., description="Damage level 1-5 (1=Excellent, 5=Severe)")
     detection_source: str = Field(..., description="YOLO, Gemini Interfered, or Rejected")
 
 

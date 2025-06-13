@@ -242,6 +242,7 @@ class DetectionService:
                         "Bawa ke pusat daur ulang e-waste"
                     ]
                     risk_level = calculate_risk_level(final_category, det.confidence)
+                    damage_level = 3  # Default damage level
                     prediction = FullPrediction(
                         id=generate_unique_id(),
                         category=final_category,
@@ -251,6 +252,7 @@ class DetectionService:
                         bbox=det.bbox,
                         suggestion=suggestions,
                         risk_lvl=risk_level,
+                        damage_level=damage_level,
                         detection_source="YOLO (crop too small)"
                     )
                     predictions.append(prediction)
@@ -284,6 +286,25 @@ class DetectionService:
                     logger.error(f"Gemini validation exception: {e}")
                     final_category = mapped_category
                     detection_source = "YOLO (Gemini exception)"
+                
+                # --- Damage level analysis ---
+                try:
+                    damage_level, damage_analysis = await self.gemini_service.analyze_damage_level(
+                        cropped_path, final_category,
+                        extra_image_path=None,
+                        prompt_context={
+                            "all_detections": [
+                                {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} for d in filtered_detections
+                            ],
+                            "focus_bbox": det.bbox,
+                            "focus_label": final_category
+                        }
+                    )
+                    logger.info(f"Damage level analysis: {damage_level} - {damage_analysis}")
+                except Exception as e:
+                    logger.error(f"Damage level analysis exception: {e}")
+                    damage_level = 3  # Default damage level
+                
                 # --- Price prediction ---
                 price = self.price_predictor.predict_price(final_category)
                 # --- Robust Gemini description/suggestions ---
@@ -322,6 +343,7 @@ class DetectionService:
                     bbox=det.bbox,
                     suggestion=suggestions,
                     risk_lvl=risk_level,
+                    damage_level=damage_level,
                     detection_source=detection_source
                 )
                 predictions.append(prediction)
