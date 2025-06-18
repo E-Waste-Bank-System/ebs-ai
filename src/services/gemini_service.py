@@ -1,16 +1,19 @@
 """
 Gemini AI Service Module
-Handles validation using Google's Gemini
+Handles validation using Google's Gemini with performance optimizations
 """
 
 import json
 import logging
+import asyncio
 from typing import List, Dict, Any, Tuple
 from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
 
 from src.config.settings import (
     GEMINI_AVAILABLE, GEMINI_MODEL, GEMINI_MAX_TOKENS, 
-    GEMINI_TEMPERATURE, GEMINI_TOP_P
+    GEMINI_TEMPERATURE, GEMINI_TOP_P, GEMINI_MAX_WORKERS,
+    GEMINI_TIMEOUT, GEMINI_REQUEST_TIMEOUT
 )
 from src.utils.mappings import PRICE_CATEGORIES, is_valid_price_category
 from src.models.response_models import ValidationResult
@@ -19,17 +22,26 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiService:
-    """Gemini AI Service for validation"""
+    """Gemini AI Service for validation with performance optimizations"""
     
     def __init__(self):
         self.model = None
         self.is_available = GEMINI_AVAILABLE
+        self.executor = ThreadPoolExecutor(max_workers=GEMINI_MAX_WORKERS)
+        
+        # Optimized generation config
+        self.generation_config = {
+            "max_output_tokens": GEMINI_MAX_TOKENS,
+            "temperature": GEMINI_TEMPERATURE,
+            "top_p": GEMINI_TOP_P,
+            "candidate_count": 1,  # Only generate one candidate for speed
+        }
         
         if self.is_available:
             try:
                 import google.generativeai as genai
                 self.model = genai.GenerativeModel(GEMINI_MODEL)
-                logger.info("Gemini service initialized successfully")
+                logger.info(f"Gemini service initialized with {GEMINI_MODEL} and {GEMINI_MAX_WORKERS} workers")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini: {str(e)}")
                 self.is_available = False
@@ -96,24 +108,21 @@ Important:
             else:
                 prompt = self._create_validation_prompt(yolo_prediction, mapped_category)
             # Gemini call
-            response = self.model.generate_content(
-                [prompt] + images,
-                generation_config={
-                    "max_output_tokens": GEMINI_MAX_TOKENS,
-                    "temperature": GEMINI_TEMPERATURE,
-                    "top_p": GEMINI_TOP_P
-                }
-            )
-            if not response.text:
-                logger.warning("Empty Gemini response")
+            response = await self._call_gemini_with_timeout(prompt, images)
+            if not response:
+                logger.warning("Empty Gemini validation response")
                 return ValidationResult(
                     is_valid=True,
                     final_category=mapped_category,
                     detection_source="YOLO",
                     gemini_feedback="Gemini validation failed - empty response"
                 )
+            
+            # Log the raw response for debugging
+            logger.debug(f"Raw Gemini validation response: {response[:200]}...")
+            
             return self._process_validation_response(
-                response.text, mapped_category, yolo_prediction
+                response, mapped_category, yolo_prediction
             )
         except Exception as e:
             logger.error(f"Gemini validation error: {str(e)}")
@@ -139,50 +148,31 @@ Important:
                 focus_bbox = prompt_context.get("focus_bbox")
                 focus_label = prompt_context.get("focus_label")
                 prompt = f"""
-Analisis kondisi e-waste pada gambar. Gambar pertama berisi semua deteksi dengan bounding box dan label. Gambar kedua (jika ada) adalah crop dari objek fokus.
+Describe this e-waste in Indonesian (max 15 words):
+Category: {category}
 
-Semua deteksi:
-{json.dumps(all_dets, ensure_ascii=False)}
-
-Fokus hanya pada objek dengan label '{focus_label}' dan bounding box {focus_bbox}.
-
-Kategori: {category}
-
-Buat deskripsi singkat (maksimal 15 kata) dalam Bahasa Indonesia, fokus pada kondisi aktual perangkat di area fokus.
+Focus: condition, brand/model if visible, damage.
+Example: "Laptop Dell rusak layar retak keyboard aus"
 """
             else:
                 prompt = f"""
-Analisis kondisi e-waste ini dan buat deskripsi singkat (10-15 kata) dalam Bahasa Indonesia.
-Kategori: {category}
+Describe this e-waste in Indonesian (max 15 words):
+Category: {category}
 
-Fokus pada:
-1. Kondisi fisik (rusak/utuh/berkarat/dll)
-2. Usia dan model (jika terlihat)
-3. Komponen yang terlihat
-4. Kerusakan spesifik (jika ada)
-
-Deskripsi harus:
-- Jelas dan informatif
-- Maksimal 15 kata
-- Dalam Bahasa Indonesia
-- Fokus pada kondisi aktual perangkat
-- Sertakan detail spesifik yang terlihat
-
-Contoh format yang diharapkan:
-"Laptop Dell Latitude dengan layar retak dan keyboard aus"
-"Smartphone Samsung dengan casing retak dan layar bergaris"
-"Monitor LG dengan bezel hitam dan port HDMI terlihat"
+Focus: condition, brand/model if visible, damage.
+Example: "Laptop Dell rusak layar retak keyboard aus"
 """
-            response = self.model.generate_content(
-                [prompt] + images,
-                generation_config={
-                    "max_output_tokens": 3000,
-                    "temperature": 0.3,
-                    "top_p": 0.8
-                }
-            )
-            if response.text:
-                return response.text.strip()
+            response = await self._call_gemini_with_timeout(prompt, images)
+            if response:
+                description = response.strip()
+                # Clean up the description
+                if description and len(description) > 5:
+                    return description
+                else:
+                    logger.warning("Empty or very short description from Gemini")
+            else:
+                logger.warning("No response text from Gemini for description")
+            
             return f"Perangkat elektronik {category.lower()}"
         except Exception as e:
             logger.error(f"Gemini description error: {str(e)}")
@@ -208,66 +198,77 @@ Contoh format yang diharapkan:
                 focus_bbox = prompt_context.get("focus_bbox")
                 focus_label = prompt_context.get("focus_label")
                 prompt = f"""
-Analisis kondisi e-waste pada gambar. Gambar pertama berisi semua deteksi dengan bounding box dan label. Gambar kedua (jika ada) adalah crop dari objek fokus.
+Create 3 disposal steps for this e-waste in Indonesian:
+Category: {category}
 
-Semua deteksi:
-{json.dumps(all_dets, ensure_ascii=False)}
+Format:
+1. [step 1 - max 8 words]
+2. [step 2 - max 8 words] 
+3. [step 3 - max 8 words]
 
-Fokus hanya pada objek dengan label '{focus_label}' dan bounding box {focus_bbox}.
-
-Kategori: {category}
-
-Buat 3 langkah penanganan spesifik untuk objek di area fokus, maksimal 10 kata per langkah, dalam Bahasa Indonesia.
+Focus on safety and recycling.
 """
             else:
                 prompt = f"""
-Analisis kondisi e-waste ini dan buat 3 langkah penanganan dalam Bahasa Indonesia.
-Kategori: {category}
-
-Langkah-langkah harus:
-1. Spesifik untuk kondisi perangkat yang terlihat
-2. Fokus pada keamanan dan lingkungan
-3. Mudah diikuti
-4. Maksimal 10 kata per langkah
-5. Dalam Bahasa Indonesia
+Create 3 disposal steps for this e-waste in Indonesian:
+Category: {category}
 
 Format:
-1. [Langkah pertama]
-2. [Langkah kedua]
-3. [Langkah ketiga]
+1. [step 1 - max 8 words]
+2. [step 2 - max 8 words] 
+3. [step 3 - max 8 words]
 
-Contoh untuk perangkat rusak:
-1. Pisahkan komponen yang rusak dengan hati-hati
-2. Simpan bagian yang masih berfungsi
-3. Bawa ke pusat daur ulang e-waste
-
-Contoh untuk perangkat utuh:
-1. Backup dan hapus data dengan aman
-2. Lepas komponen yang bisa dilepas
-3. Bawa ke pusat daur ulang e-waste
+Focus on safety and recycling.
 """
-            response = self.model.generate_content(
-                [prompt] + images,
-                generation_config={
-                    "max_output_tokens": 3000,
-                    "temperature": 0.3,
-                    "top_p": 0.8
-                }
-            )
-            if response.text:
+            response = await self._call_gemini_with_timeout(prompt, images)
+            if response:
                 # Parse numbered list
                 suggestions = []
-                for line in response.text.strip().split('\n'):
-                    if line.strip() and any(line.strip().startswith(str(i)) for i in range(1, 10)):
-                        suggestion = line.split('.', 1)[1].strip()
-                        suggestions.append(suggestion)
-                # Fill with defaults if fewer than 3
-                while len(suggestions) < 3:
-                    suggestions.append(default_suggestions[len(suggestions)])
+                lines = response.strip().split('\n')
+                
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Check if line starts with a number
+                    if any(line.startswith(f"{i}.") for i in range(1, 10)):
+                        # Split only on the first dot and check if there's content after it
+                        parts = line.split('.', 1)
+                        if len(parts) > 1 and parts[1].strip():
+                            suggestion = parts[1].strip()
+                            if suggestion:  # Only add non-empty suggestions
+                                suggestions.append(suggestion)
+                
+                # If we didn't find numbered suggestions, try to parse without numbers
+                if not suggestions:
+                    for line in lines:
+                        line = line.strip()
+                        if line and not line.startswith('#') and len(line) > 5:  # Skip headers and very short lines
+                            # Remove common prefixes
+                            for prefix in ['- ', '• ', '* ', '1. ', '2. ', '3. ']:
+                                if line.startswith(prefix):
+                                    line = line[len(prefix):].strip()
+                                    break
+                            if line and len(line) > 5:
+                                suggestions.append(line)
+                
+                # Ensure we have exactly 3 suggestions
+                if len(suggestions) > 3:
+                    suggestions = suggestions[:3]
+                elif len(suggestions) < 3:
+                    # Fill with defaults if fewer than 3
+                    while len(suggestions) < 3:
+                        if len(suggestions) < len(default_suggestions):
+                            suggestions.append(default_suggestions[len(suggestions)])
+                        else:
+                            suggestions.append("Bawa ke pusat daur ulang e-waste")
+                
                 return suggestions[:3]
             return default_suggestions
         except Exception as e:
             logger.error(f"Gemini suggestions error: {str(e)}")
+            logger.debug(f"Gemini suggestions - Raw response: {getattr(response, 'text', 'No response') if 'response' in locals() else 'No response object'}")
             return default_suggestions
     
     async def analyze_damage_level(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> Tuple[int, str]:
@@ -284,50 +285,53 @@ Contoh untuk perangkat utuh:
                 images.append(Image.open(extra_image_path))
             
             prompt = f"""
-Analyze the physical condition of this e-waste item.
+Rate damage level 1-5 for this e-waste:
 Category: {category}
 
-Assess the following aspects:
-1. Physical damage (scratches, dents, cracks)
-2. Component condition (missing parts, loose connections)
-3. Wear and tear (age-related deterioration)
-4. Functionality indicators (power ports, buttons, screens)
-5. Overall appearance
+Scale:
+1=Excellent, 2=Good, 3=Fair, 4=Poor, 5=Severe
 
-Rate the damage level from 1 to 5:
-1 = Excellent condition (like new, minimal wear)
-2 = Good condition (minor wear, fully functional)
-3 = Fair condition (visible wear, some damage)
-4 = Poor condition (significant damage, may not function)
-5 = Severe damage (extensive damage, non-functional)
+Look for: scratches, cracks, missing parts, wear, functionality.
 
-Respond in this exact JSON format:
+JSON only:
 {{
     "damage_level": 1-5,
-    "analysis": "Detailed analysis of the damage",
-    "key_issues": ["List of main issues found"]
+    "analysis": "brief condition description",
+    "key_issues": ["main problems"]
 }}
 """
-            response = self.model.generate_content(
-                [prompt] + images,
-                generation_config={
-                    "max_output_tokens": GEMINI_MAX_TOKENS,
-                    "temperature": GEMINI_TEMPERATURE,
-                    "top_p": GEMINI_TOP_P
-                }
-            )
+            response = await self._call_gemini_with_timeout(prompt, images)
             
-            if not response.text:
+            if not response:
                 return 3, "Damage analysis failed - empty response"
             
             # Parse response
             try:
-                result = json.loads(response.text.strip())
+                # Clean the response text to handle markdown code blocks
+                cleaned_text = response.strip()
+                if cleaned_text.startswith('```json'):
+                    cleaned_text = cleaned_text[7:]  # Remove ```json
+                if cleaned_text.endswith('```'):
+                    cleaned_text = cleaned_text[:-3]  # Remove ```
+                cleaned_text = cleaned_text.strip()
+                
+                if not cleaned_text:
+                    logger.warning("Empty response from Gemini damage analysis")
+                    return 3, "Empty response from Gemini"
+                
+                result = json.loads(cleaned_text)
                 damage_level = int(result.get("damage_level", 3))
                 analysis = result.get("analysis", "No detailed analysis available")
+                
+                # Validate damage level is in valid range
+                if damage_level < 1 or damage_level > 5:
+                    logger.warning(f"Invalid damage level {damage_level} from Gemini, defaulting to 3")
+                    damage_level = 3
+                
                 return damage_level, analysis
-            except (json.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
                 logger.error(f"Failed to parse damage analysis response: {e}")
+                logger.debug(f"Raw response: {response[:200]}...")
                 return 3, "Damage analysis parsing failed"
                 
         except Exception as e:
@@ -335,35 +339,27 @@ Respond in this exact JSON format:
             return 3, f"Damage analysis error: {str(e)}"
     
     def _create_validation_prompt(self, yolo_prediction: str, mapped_category: str) -> str:
-        """Create validation prompt for Gemini"""
+        """Create optimized validation prompt for Gemini"""
         return f"""
-Analyze this image and verify if the detected object matches the predicted category.
+Analyze this e-waste image quickly.
 
-YOLO Prediction: {yolo_prediction}
-Mapped Category: {mapped_category}
+YOLO detected: {yolo_prediction}
+Mapped to: {mapped_category}
 
-Your task:
-1. Identify the main e-waste object in this image
-2. Determine if it matches the mapped category: "{mapped_category}"
-3. If incorrect, suggest the best matching category from this list: {', '.join(PRICE_CATEGORIES)}
-4. Assess the physical condition and damage level (1-5)
+Task: Verify if this is correct e-waste category.
 
-Respond in this exact JSON format:
+Valid categories: {', '.join(list(PRICE_CATEGORIES)[:20])}...
+
+JSON response only:
 {{
-    "object_identified": "description of what you see",
+    "object_identified": "brief description",
     "is_category_correct": true/false,
-    "correct_category": "category name from the list or null if correct",
+    "correct_category": "category or null",
     "confidence": 0.0-1.0,
-    "reasoning": "brief explanation",
-    "damage_level": 1-5,
-    "damage_analysis": "brief analysis of physical condition"
+    "reasoning": "short explanation"
 }}
 
-Important: 
-- Only use categories from the provided list
-- Be precise about object identification
-- Consider the context and main object focus
-- Maximum {GEMINI_MAX_TOKENS} tokens in response
+Be concise and focus on the main object.
 """
     
     def _process_validation_response(
@@ -422,3 +418,29 @@ Important:
     def is_service_available(self) -> bool:
         """Check if Gemini service is available"""
         return self.is_available
+
+    async def _call_gemini_with_timeout(self, prompt: str, images: List[Image.Image]) -> str:
+        """Make a Gemini call with timeout and error handling"""
+        if not self.is_available or self.model is None:
+            raise Exception("Gemini not available")
+        
+        def _sync_call():
+            return self.model.generate_content(
+                [prompt] + images,
+                generation_config=self.generation_config
+            )
+        
+        # Use asyncio.wait_for with executor for timeout
+        try:
+            loop = asyncio.get_event_loop()
+            response = await asyncio.wait_for(
+                loop.run_in_executor(self.executor, _sync_call),
+                timeout=GEMINI_REQUEST_TIMEOUT
+            )
+            return response.text or ""
+        except asyncio.TimeoutError:
+            logger.warning(f"Gemini request timed out after {GEMINI_REQUEST_TIMEOUT}s")
+            return ""
+        except Exception as e:
+            logger.error(f"Gemini call failed: {str(e)}")
+            return ""

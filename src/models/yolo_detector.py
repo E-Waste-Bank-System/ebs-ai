@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 from PIL import Image
 
 from src.config.settings import YOLO_MODEL_PATH, YOLO_AVAILABLE
-from src.utils.mappings import CLASS_NAMES
+from src.utils.mappings import CLASS_NAMES, get_class_name_for_index
 from src.models.response_models import Detection
 from src.utils.helpers import generate_unique_id
 
@@ -59,7 +59,10 @@ class YOLODetector:
             detections = []
             for box in results[0].boxes:
                 class_idx = int(box.cls)
-                class_name = CLASS_NAMES[class_idx]
+                
+                # Get class name using the new function that handles unknown indices
+                class_name = get_class_name_for_index(class_idx)
+                
                 confidence = float(box.conf)
                 bbox = [float(x) for x in box.xyxy[0].tolist()]
                 detection = Detection(
@@ -95,7 +98,10 @@ class YOLODetector:
             details = []
             for box in results[0].boxes:
                 class_idx = int(box.cls)
-                class_name = CLASS_NAMES[class_idx]
+                
+                # Get class name using the new function that handles unknown indices
+                class_name = get_class_name_for_index(class_idx)
+                
                 confidence = float(box.conf)
                 bbox = [float(x) for x in box.xyxy[0].tolist()]
                 
