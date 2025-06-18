@@ -285,6 +285,7 @@ class DetectionService:
                 # --- Robust Gemini validation ---
                 # Note: final_category will be used for price/risk calculations, display_category for UI
                 final_price_category = price_category  # Default to mapped category
+                final_display_category = display_category  # Default to original YOLO category
                 
                 try:
                     gemini_start = time.time()
@@ -306,10 +307,15 @@ class DetectionService:
                         final_price_category = price_category
                         detection_source = "YOLO (Gemini fail)"
                     else:
-                        final_price_category = validation.final_category or price_category
+                        if validation.final_category and validation.final_category != price_category:
+                            # Gemini corrected the category - update both display and price categories
+                            final_price_category = validation.final_category
+                            final_display_category = validation.final_category  # Use corrected category for display too
+                            logger.info(f"Gemini corrected category: '{display_category}' -> '{final_display_category}' (price: '{price_category}' -> '{final_price_category}')")
+                        else:
+                            # No correction needed
+                            final_price_category = price_category
                         detection_source = validation.detection_source
-                        if validation.final_category:
-                            logger.info(f"Gemini corrected price category from '{price_category}' to '{final_price_category}'")
                 except Exception as e:
                     logger.error(f"Gemini validation exception: {e}")
                     final_price_category = price_category
@@ -318,14 +324,14 @@ class DetectionService:
                 # --- Damage level analysis ---
                 try:
                     damage_level_gemini, damage_analysis = await self.gemini_service.analyze_damage_level(
-                        cropped_path, final_price_category,
+                        cropped_path, final_display_category,  # Use display category for better context
                         extra_image_path=None,
                         prompt_context={
                             "all_detections": [
                                 {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} for d in filtered_detections
                             ],
                             "focus_bbox": det.bbox,
-                            "focus_label": final_price_category
+                            "focus_label": final_display_category  # Use final display category
                         }
                     )
                     # Scale Gemini's 1-5 result to 1-10 for UI
@@ -342,14 +348,14 @@ class DetectionService:
                 try:
                     gemini_start = time.time()
                     description, suggestions = await self._generate_content_with_timeout(
-                        cropped_path, display_category,  # Use display category for more natural descriptions
+                        cropped_path, final_display_category,  # Use final display category (may be corrected by Gemini)
                         extra_image_path=None,
                         prompt_context={
                             "all_detections": [
                                 {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} for d in filtered_detections
                             ],
                             "focus_bbox": det.bbox,
-                            "focus_label": display_category  # Use display category
+                            "focus_label": final_display_category  # Use final display category
                         }
                     )
                     gemini_time = time.time() - gemini_start
@@ -358,7 +364,7 @@ class DetectionService:
                         raise ValueError("Empty or invalid Gemini description/suggestions")
                 except Exception as e:
                     logger.error(f"Gemini content generation exception: {e}")
-                    description = f"Perangkat elektronik {display_category.lower()}"  # Use display category
+                    description = f"Perangkat elektronik {final_display_category.lower()}"  # Use final display category
                     suggestions = [
                         "Periksa panduan manufacturer",
                         "Pisahkan komponen berbahaya",
@@ -367,7 +373,7 @@ class DetectionService:
                 risk_level = calculate_risk_level(final_price_category, det.confidence)
                 prediction = FullPrediction(
                     id=generate_unique_id(),
-                    category=display_category,  # Keep original category for display
+                    category=final_display_category,  # Use final display category (corrected if needed)
                     confidence=det.confidence,
                     regression_result=price,
                     description=description,
