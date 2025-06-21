@@ -55,32 +55,4 @@ def calculate_risk_level(category: str, confidence: float) -> int:
     return min(10, max(1, scaled_risk))
 
 
-def calculate_base_damage_level(category: str) -> int:
-    """
-    Calculate base damage level expectation for different categories (1-10 scale)
-    This represents typical wear/damage for each category type
-    """
-    base_damage = {
-        # Categories that typically show more wear
-        "Laptop": 6, "Handphone": 5, "Keyboard": 4, "Mouse": 4,
-        "Seterika": 7, "Hair Dryer": 6, "Kompor Listrik": 6,
-        
-        # Categories that are often well-preserved
-        "TV": 4, "Monitor": 4, "Printer": 5, "CPU Intel": 3,
-        "Speaker": 4, "Router": 3, "Camera": 5,
-        
-        # Categories with variable condition
-        "Adaptor /Kilo": 5, "Baterai Laptop": 6, "Hardisk": 4,
-        "Lampu": 3, "Kipas": 5, "Senter": 4, "Jam Tangan": 4,
-        
-        # Heavy-duty items that might show wear
-        "Mesin Cuci": 7, "Microwave": 5, "Oven": 6, "Vacum Cleaner": 6,
-        "Komponen Kulkas": 5, "AC": 6, "Panel Surya": 3,
-        
-        # Small components
-        "Komponen CPU": 4, "Flashdisk": 3, "Remot": 4, "Telefon": 5,
-        "Alat Tensi": 4, "Alat Tes Vol": 4, "PS2": 5, "Solder": 5,
-        "Neon Box": 4, "Aki Motor": 7
-    }
-    
-    return base_damage.get(category, 5)  # Default to middle range
+

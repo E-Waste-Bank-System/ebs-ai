@@ -82,26 +82,25 @@ All detected objects:
 
 Focus only on the object with label '{focus_label}' and bounding box {focus_bbox}.
 
-YOLO Prediction: {yolo_prediction}
-Mapped Category: {mapped_category}
+YOLO detected: {yolo_prediction}
 
 Your task:
-1. Identify the main e-waste object in the focus region
-2. Determine if it matches the mapped category: "{mapped_category}"
-3. If incorrect, suggest the best matching category from this list: {', '.join(PRICE_CATEGORIES)}
+1. Identify what electronic/e-waste object you see in the focus region
+2. Determine if this is valid e-waste (any electronic device, battery, or electronic component)
+3. Find the best matching category from this list: {', '.join(PRICE_CATEGORIES)}
 
 Respond in this exact JSON format:
 {{
     "object_identified": "description of what you see",
-    "is_category_correct": true/false,
-    "correct_category": "category name from the list or null if correct",
+    "is_valid_ewaste": true/false,
+    "best_category": "category name from the list or null if not e-waste",
     "confidence": 0.0-1.0,
     "reasoning": "brief explanation"
 }}
 
 Important:
-- Only use categories from the provided list
-- Be precise about object identification
+- Accept any electronic device as valid e-waste (phones, laptops, batteries, chargers, etc.)
+- Choose the most appropriate category for pricing/analysis purposes
 - Focus only on the object in the focus region
 - Maximum {GEMINI_MAX_TOKENS} tokens in response
 """
@@ -274,10 +273,10 @@ Focus on safety and recycling.
     async def analyze_damage_level(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> Tuple[int, str]:
         """
         Analyze damage level of e-waste using Gemini vision.
-        Returns damage level (1-5) and detailed analysis.
+        Returns damage level (1-10) and detailed analysis.
         """
         if not self.is_available or self.model is None:
-            return 3, "Damage analysis unavailable"
+            return 5, "Damage analysis unavailable"
         
         try:
             images = [Image.open(image_path)]
@@ -285,17 +284,21 @@ Focus on safety and recycling.
                 images.append(Image.open(extra_image_path))
             
             prompt = f"""
-Rate damage level 1-5 for this e-waste:
+Rate damage level 1-10 for this e-waste:
 Category: {category}
 
 Scale:
-1=Excellent, 2=Good, 3=Fair, 4=Poor, 5=Severe
+1-2=Excellent (like new, minimal wear)
+3-4=Good (light wear, fully functional)
+5-6=Fair (moderate wear, some issues)
+7-8=Poor (significant damage, limited function)
+9-10=Severe (heavily damaged, non-functional)
 
-Look for: scratches, cracks, missing parts, wear, functionality.
+Look for: scratches, cracks, missing parts, wear, functionality, corrosion, discoloration.
 
 JSON only:
 {{
-    "damage_level": 1-5,
+    "damage_level": 1-10,
     "analysis": "brief condition description",
     "key_issues": ["main problems"]
 }}
@@ -303,7 +306,7 @@ JSON only:
             response = await self._call_gemini_with_timeout(prompt, images)
             
             if not response:
-                return 3, "Damage analysis failed - empty response"
+                return 5, "Damage analysis failed - empty response"
             
             # Parse response
             try:
@@ -317,26 +320,26 @@ JSON only:
                 
                 if not cleaned_text:
                     logger.warning("Empty response from Gemini damage analysis")
-                    return 3, "Empty response from Gemini"
+                    return 5, "Empty response from Gemini"
                 
                 result = json.loads(cleaned_text)
-                damage_level = int(result.get("damage_level", 3))
+                damage_level = int(result.get("damage_level", 5))
                 analysis = result.get("analysis", "No detailed analysis available")
                 
                 # Validate damage level is in valid range
-                if damage_level < 1 or damage_level > 5:
-                    logger.warning(f"Invalid damage level {damage_level} from Gemini, defaulting to 3")
-                    damage_level = 3
+                if damage_level < 1 or damage_level > 10:
+                    logger.warning(f"Invalid damage level {damage_level} from Gemini, defaulting to 5")
+                    damage_level = 5
                 
                 return damage_level, analysis
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 logger.error(f"Failed to parse damage analysis response: {e}")
                 logger.debug(f"Raw response: {response[:200]}...")
-                return 3, "Damage analysis parsing failed"
+                return 5, "Damage analysis parsing failed"
                 
         except Exception as e:
             logger.error(f"Damage analysis error: {str(e)}")
-            return 3, f"Damage analysis error: {str(e)}"
+            return 5, f"Damage analysis error: {str(e)}"
     
     def _create_validation_prompt(self, yolo_prediction: str, mapped_category: str) -> str:
         """Create optimized validation prompt for Gemini"""
@@ -344,22 +347,21 @@ JSON only:
 Analyze this e-waste image quickly.
 
 YOLO detected: {yolo_prediction}
-Mapped to: {mapped_category}
 
-Task: Verify if this is correct e-waste category.
+Task: Identify the electronic object and find best category.
 
 Valid categories: {', '.join(list(PRICE_CATEGORIES)[:20])}...
 
 JSON response only:
 {{
     "object_identified": "brief description",
-    "is_category_correct": true/false,
-    "correct_category": "category or null",
+    "is_valid_ewaste": true/false,
+    "best_category": "category or null",
     "confidence": 0.0-1.0,
     "reasoning": "short explanation"
 }}
 
-Be concise and focus on the main object.
+Accept any electronic device as valid e-waste.
 """
     
     def _process_validation_response(
@@ -380,30 +382,33 @@ Be concise and focus on the main object.
             
             gemini_result = json.loads(cleaned_text)
             
-            is_correct = gemini_result.get("is_category_correct", True)
-            suggested_category = gemini_result.get("correct_category")
+            # Handle both old and new response formats for backward compatibility
+            is_valid_ewaste = gemini_result.get("is_valid_ewaste", gemini_result.get("is_category_correct", True))
+            best_category = gemini_result.get("best_category", gemini_result.get("correct_category"))
             reasoning = gemini_result.get("reasoning", "")
             
-            if is_correct:
-                return ValidationResult(
-                    is_valid=True,
-                    final_category=mapped_category,
-                    detection_source="YOLO",
-                    gemini_feedback=f"Category validated by Gemini: {reasoning}"
-                )
-            elif suggested_category and is_valid_price_category(suggested_category):
-                return ValidationResult(
-                    is_valid=True,
-                    final_category=suggested_category,
-                    detection_source="Gemini Interfered",
-                    gemini_feedback=f"Corrected from {mapped_category} to {suggested_category}: {reasoning}"
-                )
-            else:
+            if not is_valid_ewaste:
                 return ValidationResult(
                     is_valid=False,
                     final_category=None,
                     detection_source="Rejected",
-                    gemini_feedback=f"No valid e-waste detected: {reasoning}"
+                    gemini_feedback=f"Not valid e-waste: {reasoning}"
+                )
+            elif best_category and is_valid_price_category(best_category) and best_category != mapped_category:
+                return ValidationResult(
+                    is_valid=True,
+                    final_category=best_category,
+                    detection_source="Gemini Interfered",
+                    gemini_feedback=f"Corrected from {mapped_category} to {best_category}: {reasoning}"
+                )
+            else:
+                # Valid e-waste, use mapped category (or best_category if it's the same)
+                final_category = best_category if best_category and is_valid_price_category(best_category) else mapped_category
+                return ValidationResult(
+                    is_valid=True,
+                    final_category=final_category,
+                    detection_source="YOLO" if final_category == mapped_category else "Gemini Interfered",
+                    gemini_feedback=f"Valid e-waste confirmed: {reasoning}"
                 )
                 
         except json.JSONDecodeError:

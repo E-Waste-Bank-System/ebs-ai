@@ -24,7 +24,7 @@ from src.models.response_models import (
 from src.models.yolo_detector import YOLODetector
 from src.models.price_predictor import PricePredictor
 from src.services.gemini_service import GeminiService
-from src.utils.helpers import generate_unique_id, calculate_risk_level, calculate_base_damage_level
+from src.utils.helpers import generate_unique_id, calculate_risk_level
 from src.utils.mappings import get_mapped_category, is_valid_price_category
 
 logger = logging.getLogger(__name__)
@@ -255,7 +255,7 @@ class DetectionService:
                 cropped_paths.append(cropped_path)
                 # --- Minimum crop size check ---
                 if not self._is_valid_crop(cropped_path):
-                    logger.warning(f"Cropped image too small for Gemini: {cropped_path}. Using YOLO result.")
+                    logger.warning(f"Cropped image too small for optimal Gemini analysis: {cropped_path}. Trying Gemini anyway.")
                     
                     # Use price category for price prediction
                     price = self.price_predictor.predict_price(price_category)
@@ -265,9 +265,29 @@ class DetectionService:
                         "Pisahkan komponen berbahaya",
                         "Bawa ke pusat daur ulang e-waste"
                     ]
-                    # Use price category for risk/damage calculations since they're based on hazard levels
+                    
+                    # Try Gemini damage analysis even for small crops
+                    try:
+                        damage_level, damage_analysis = await self.gemini_service.analyze_damage_level(
+                            cropped_path, display_category,
+                            extra_image_path=None,
+                            prompt_context={
+                                "all_detections": [
+                                    {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} for d in filtered_detections
+                                ],
+                                "focus_bbox": det.bbox,
+                                "focus_label": display_category
+                            }
+                        )
+                        logger.info(f"Damage level analysis (small crop): {damage_level} - {damage_analysis}")
+                    except Exception as e:
+                        logger.error(f"Damage level analysis failed for small crop: {e}")
+                        # Set to None when Gemini fails - damage level is exclusively handled by Gemini
+                        damage_level = None
+                        logger.info(f"Damage level unavailable - Gemini analysis failed")
+                    
+                    # Use price category for risk calculations since they're based on hazard levels
                     risk_level = calculate_risk_level(price_category, det.confidence)
-                    damage_level = calculate_base_damage_level(price_category)
                     prediction = FullPrediction(
                         id=generate_unique_id(),
                         category=display_category,  # Keep original category for display
@@ -323,7 +343,7 @@ class DetectionService:
                 
                 # --- Damage level analysis ---
                 try:
-                    damage_level_gemini, damage_analysis = await self.gemini_service.analyze_damage_level(
+                    damage_level, damage_analysis = await self.gemini_service.analyze_damage_level(
                         cropped_path, final_display_category,  # Use display category for better context
                         extra_image_path=None,
                         prompt_context={
@@ -334,13 +354,12 @@ class DetectionService:
                             "focus_label": final_display_category  # Use final display category
                         }
                     )
-                    # Scale Gemini's 1-5 result to 1-10 for UI
-                    damage_level = min(10, max(1, damage_level_gemini * 2))
-                    logger.info(f"Damage level analysis: {damage_level_gemini} (scaled to {damage_level}) - {damage_analysis}")
+                    logger.info(f"Damage level analysis: {damage_level} - {damage_analysis}")
                 except Exception as e:
                     logger.error(f"Damage level analysis exception: {e}")
-                    # Use category-specific base damage level when Gemini fails
-                    damage_level = calculate_base_damage_level(final_price_category)
+                    # Set to None when Gemini fails - damage level is exclusively handled by Gemini
+                    damage_level = None
+                    logger.info(f"Damage level unavailable - Gemini analysis failed")
                 
                 # --- Price prediction ---
                 price = self.price_predictor.predict_price(final_price_category)
