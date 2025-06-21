@@ -15,7 +15,7 @@ import numpy as np
 
 from src.config.settings import (
     YOLO_AVAILABLE, YOLO_MODEL_PATH, LOW_CONFIDENCE_THRESHOLD,
-    MEDIUM_CONFIDENCE_THRESHOLD, GEMINI_TIMEOUT
+    MEDIUM_CONFIDENCE_THRESHOLD, GEMINI_TIMEOUT, GEMINI_ENABLE_CROSS_VALIDATION
 )
 from src.models.response_models import (
     Detection, FullPrediction, FullResponse,
@@ -135,43 +135,7 @@ class DetectionService:
         
         return description
     
-    async def _generate_content_with_timeout(
-        self, image_path: str, category: str, timeout: float = None,
-        extra_image_path: str = None, prompt_context: dict = None
-    ) -> Tuple[str, List[str]]:
-        """
-        Generate description and suggestions with timeout, supporting extra image and prompt context.
-        """
-        if timeout is None:
-            timeout = GEMINI_TIMEOUT * 0.7  # Use 70% of global timeout for individual operations
-            
-        try:
-            async with asyncio.timeout(timeout):
-                # Run description and suggestions concurrently for speed
-                description_task = self.gemini_service.generate_description(
-                    image_path, category, extra_image_path=extra_image_path, prompt_context=prompt_context
-                )
-                suggestions_task = self.gemini_service.generate_suggestions(
-                    image_path, category, extra_image_path=extra_image_path, prompt_context=prompt_context
-                )
-                
-                description, suggestions = await asyncio.gather(
-                    description_task, suggestions_task, return_exceptions=True
-                )
-                
-                # Handle exceptions from concurrent tasks
-                if isinstance(description, Exception):
-                    logger.warning(f"Description generation failed: {description}")
-                    description = f"{category} terdeteksi dalam gambar."
-                
-                if isinstance(suggestions, Exception):
-                    logger.warning(f"Suggestions generation failed: {suggestions}")
-                    suggestions = ["Bawa ke pusat daur ulang e-waste terdekat."]
-                
-                return self._clean_description(description), suggestions
-        except asyncio.TimeoutError:
-            logger.warning(f"Content generation timed out after {timeout} seconds")
-            return f"{category} terdeteksi dalam gambar.", ["Bawa ke pusat daur ulang e-waste terdekat."]
+
     
     def _get_category_color(self, category: str) -> Tuple[int, int, int]:
         """Assign a unique color to each category using a hash."""
@@ -209,6 +173,7 @@ class DetectionService:
     ) -> FullResponse:
         """
         Process image with complete pipeline including validation and pricing
+        OPTIMIZED for speed with parallel processing
         """
         if not YOLO_AVAILABLE:
             logger.error("YOLO not available")
@@ -227,193 +192,194 @@ class DetectionService:
             detections = self.yolo_detector.detect_objects(tmp_path, save_annotated_path=annotated_path)
             yolo_time = time.time() - yolo_start
             logger.info(f"YOLO detection completed in {yolo_time:.2f} seconds")
-            logger.info(f"Annotated image saved for debugging: {annotated_path}")
             
             if not detections:
                 logger.info("No detections found")
                 return FullResponse(predictions=[])
             
-            # Log YOLO detections
-            for det in detections:
-                logger.info(f"YOLO detected: {det.category} with confidence {det.confidence:.3f}")
-            
             # Filter overlapping detections
             filtered_detections = self._filter_overlapping_detections(detections)
-            logger.info(f"Filtered {len(detections) - len(filtered_detections)} overlapping detections")
+            logger.info(f"Processing {len(filtered_detections)} detections after filtering")
             
-            # Process each detection
-            predictions = []
+            # Process all detections in parallel for maximum speed
+            prediction_tasks = []
             for det in filtered_detections:
-                # Keep original category for display
-                display_category = det.category
-                
-                # Get mapped category ONLY for price prediction
-                price_category = get_mapped_category(det.category)
-                logger.info(f"YOLO category '{display_category}' mapped to price category '{price_category}' for pricing")
-                
-                cropped_path = self._save_cropped_bbox(tmp_path, det.bbox, det.category)
-                cropped_paths.append(cropped_path)
-                # --- Minimum crop size check ---
-                if not self._is_valid_crop(cropped_path):
-                    logger.warning(f"Cropped image too small for optimal Gemini analysis: {cropped_path}. Trying Gemini anyway.")
-                    
-                    # Use price category for price prediction
-                    price = self.price_predictor.predict_price(price_category)
-                    description = f"Perangkat elektronik {display_category.lower()}"
-                    suggestions = [
-                        "Periksa panduan manufacturer",
-                        "Pisahkan komponen berbahaya",
-                        "Bawa ke pusat daur ulang e-waste"
-                    ]
-                    
-                    # Try Gemini damage analysis even for small crops
-                    try:
-                        damage_level, damage_analysis = await self.gemini_service.analyze_damage_level(
-                            cropped_path, display_category,
-                            extra_image_path=None,
-                            prompt_context={
-                                "all_detections": [
-                                    {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} for d in filtered_detections
-                                ],
-                                "focus_bbox": det.bbox,
-                                "focus_label": display_category
-                            }
-                        )
-                        logger.info(f"Damage level analysis (small crop): {damage_level} - {damage_analysis}")
-                    except Exception as e:
-                        logger.error(f"Damage level analysis failed for small crop: {e}")
-                        # Set to None when Gemini fails - damage level is exclusively handled by Gemini
-                        damage_level = None
-                        logger.info(f"Damage level unavailable - Gemini analysis failed")
-                    
-                    # Use price category for risk calculations since they're based on hazard levels
-                    risk_level = calculate_risk_level(price_category, det.confidence)
-                    prediction = FullPrediction(
-                        id=generate_unique_id(),
-                        category=display_category,  # Keep original category for display
-                        confidence=det.confidence,
-                        regression_result=price,
-                        description=description,
-                        bbox=det.bbox,
-                        suggestion=suggestions,
-                        risk_lvl=risk_level,
-                        damage_level=damage_level,
-                        detection_source="YOLO (crop too small)"
-                    )
-                    predictions.append(prediction)
-                    continue
-                # --- Robust Gemini validation ---
-                # Note: final_category will be used for price/risk calculations, display_category for UI
-                final_price_category = price_category  # Default to mapped category
-                final_display_category = display_category  # Default to original YOLO category
-                
-                try:
-                    gemini_start = time.time()
-                    validation = await self.gemini_service.validate_detection(
-                        cropped_path, det.category, price_category,
-                        extra_image_path=None,
-                        prompt_context={
-                            "all_detections": [
-                                {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} for d in filtered_detections
-                            ],
-                            "focus_bbox": det.bbox,
-                            "focus_label": det.category
-                        }
-                    )
-                    gemini_time = time.time() - gemini_start
-                    logger.info(f"Gemini validation completed in {gemini_time:.2f} seconds")
-                    if not validation or not hasattr(validation, 'is_valid') or not validation.is_valid:
-                        logger.warning(f"Gemini validation failed or invalid: {getattr(validation, 'gemini_feedback', '')}")
-                        final_price_category = price_category
-                        detection_source = "YOLO (Gemini fail)"
-                    else:
-                        if validation.final_category and validation.final_category != price_category:
-                            # Gemini corrected the category - update both display and price categories
-                            final_price_category = validation.final_category
-                            final_display_category = validation.final_category  # Use corrected category for display too
-                            logger.info(f"Gemini corrected category: '{display_category}' -> '{final_display_category}' (price: '{price_category}' -> '{final_price_category}')")
-                        else:
-                            # No correction needed
-                            final_price_category = price_category
-                        detection_source = validation.detection_source
-                except Exception as e:
-                    logger.error(f"Gemini validation exception: {e}")
-                    final_price_category = price_category
-                    detection_source = "YOLO (Gemini exception)"
-                
-                # --- Damage level analysis ---
-                try:
-                    damage_level, damage_analysis = await self.gemini_service.analyze_damage_level(
-                        cropped_path, final_display_category,  # Use display category for better context
-                        extra_image_path=None,
-                        prompt_context={
-                            "all_detections": [
-                                {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} for d in filtered_detections
-                            ],
-                            "focus_bbox": det.bbox,
-                            "focus_label": final_display_category  # Use final display category
-                        }
-                    )
-                    logger.info(f"Damage level analysis: {damage_level} - {damage_analysis}")
-                except Exception as e:
-                    logger.error(f"Damage level analysis exception: {e}")
-                    # Set to None when Gemini fails - damage level is exclusively handled by Gemini
-                    damage_level = None
-                    logger.info(f"Damage level unavailable - Gemini analysis failed")
-                
-                # --- Price prediction ---
-                price = self.price_predictor.predict_price(final_price_category)
-                # --- Robust Gemini description/suggestions ---
-                try:
-                    gemini_start = time.time()
-                    description, suggestions = await self._generate_content_with_timeout(
-                        cropped_path, final_display_category,  # Use final display category (may be corrected by Gemini)
-                        extra_image_path=None,
-                        prompt_context={
-                            "all_detections": [
-                                {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} for d in filtered_detections
-                            ],
-                            "focus_bbox": det.bbox,
-                            "focus_label": final_display_category  # Use final display category
-                        }
-                    )
-                    gemini_time = time.time() - gemini_start
-                    logger.info(f"Gemini content generation completed in {gemini_time:.2f} seconds")
-                    if not description or not suggestions or not isinstance(suggestions, list):
-                        raise ValueError("Empty or invalid Gemini description/suggestions")
-                except Exception as e:
-                    logger.error(f"Gemini content generation exception: {e}")
-                    description = f"Perangkat elektronik {final_display_category.lower()}"  # Use final display category
-                    suggestions = [
-                        "Periksa panduan manufacturer",
-                        "Pisahkan komponen berbahaya",
-                        "Bawa ke pusat daur ulang e-waste"
-                    ]
-                risk_level = calculate_risk_level(final_price_category, det.confidence)
-                prediction = FullPrediction(
-                    id=generate_unique_id(),
-                    category=final_display_category,  # Use final display category (corrected if needed)
-                    confidence=det.confidence,
-                    regression_result=price,
-                    description=description,
-                    bbox=det.bbox,
-                    suggestion=suggestions,
-                    risk_lvl=risk_level,
-                    damage_level=damage_level,
-                    detection_source=detection_source
+                task = self._process_single_detection_optimized(
+                    det, tmp_path, filtered_detections
                 )
-                predictions.append(prediction)
+                prediction_tasks.append(task)
             
-            return FullResponse(predictions=predictions)
+            # Execute all detection processing in parallel
+            gemini_start = time.time()
+            predictions = await asyncio.gather(*prediction_tasks, return_exceptions=True)
+            gemini_time = time.time() - gemini_start
+            logger.info(f"All Gemini processing completed in {gemini_time:.2f} seconds")
+            
+            # Filter out any failed predictions and log errors
+            valid_predictions = []
+            for i, pred in enumerate(predictions):
+                if isinstance(pred, Exception):
+                    logger.error(f"Detection {i} failed: {pred}")
+                else:
+                    valid_predictions.append(pred)
+            
+            return FullResponse(predictions=valid_predictions)
             
         except Exception as e:
             logger.error(f"Error processing image: {str(e)}")
             return FullResponse(predictions=[])
         finally:
-            os.remove(tmp_path)
+            # Cleanup
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
             for cp in cropped_paths:
                 if cp and os.path.exists(cp):
                     os.remove(cp)
+    
+    async def _process_single_detection_optimized(
+        self, 
+        det: Detection, 
+        image_path: str, 
+        all_detections: List[Detection]
+    ) -> FullPrediction:
+        """
+        Process a single detection with optimized parallel Gemini calls
+        """
+        # Keep original category for display
+        display_category = det.category
+        
+        # Get mapped category for price prediction
+        price_category = get_mapped_category(det.category)
+        logger.info(f"Processing '{display_category}' -> '{price_category}'")
+        
+        # Crop the detection
+        cropped_path = self._save_cropped_bbox(image_path, det.bbox, det.category)
+        
+        try:
+            # Check crop validity
+            if not self._is_valid_crop(cropped_path):
+                logger.warning(f"Small crop for {display_category}, using fallback processing")
+                
+                # For small crops, do minimal processing
+                price = self.price_predictor.predict_price(price_category)
+                risk_level = calculate_risk_level(price_category, det.confidence)
+                
+                return FullPrediction(
+                    id=generate_unique_id(),
+                    category=display_category,
+                    confidence=det.confidence,
+                    regression_result=price,
+                    description=f"Perangkat elektronik {display_category.lower()}",
+                    bbox=det.bbox,
+                    suggestion=[
+                        "Periksa panduan manufacturer",
+                        "Pisahkan komponen berbahaya",
+                        "Bawa ke pusat daur ulang e-waste"
+                    ],
+                    risk_lvl=risk_level,
+                    damage_level=None,
+                    detection_source="YOLO (small crop)"
+                )
+            
+            # Prepare context for Gemini
+            prompt_context = {
+                "all_detections": [
+                    {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} 
+                    for d in all_detections
+                ],
+                "focus_bbox": det.bbox,
+                "focus_label": display_category
+            }
+            
+            # Use batch processing for all Gemini operations - THIS IS THE KEY OPTIMIZATION
+            batch_result = await self.gemini_service.process_batch_analysis(
+                cropped_path,
+                display_category,
+                yolo_prediction=det.category,
+                mapped_category=price_category,
+                extra_image_path=None,
+                prompt_context=prompt_context
+            )
+            
+            # Extract results from batch processing
+            validation = batch_result.get("validation")
+            description = batch_result.get("description", f"Perangkat elektronik {display_category.lower()}")
+            suggestions = batch_result.get("suggestions", [
+                "Periksa panduan manufacturer",
+                "Pisahkan komponen berbahaya", 
+                "Bawa ke pusat daur ulang e-waste"
+            ])
+            damage_level = batch_result.get("damage_level")
+            
+            # Determine final categories based on validation
+            final_display_category = display_category
+            final_price_category = price_category
+            detection_source = "YOLO"
+            
+            if validation and validation.is_valid:
+                if validation.final_category and validation.final_category != price_category:
+                    final_price_category = validation.final_category
+                    final_display_category = validation.final_category
+                    logger.info(f"Gemini corrected: '{display_category}' -> '{final_display_category}'")
+                detection_source = validation.detection_source
+            elif validation and not validation.is_valid:
+                logger.warning(f"Gemini rejected detection: {validation.gemini_feedback}")
+                detection_source = "Rejected"
+            else:
+                # Fallback: Use cross-validation with description if Gemini validation didn't work
+                if GEMINI_ENABLE_CROSS_VALIDATION:
+                    cross_validated_category = await self.gemini_service.cross_validate_category(
+                        description, display_category, price_category
+                    )
+                    if cross_validated_category != price_category:
+                        final_price_category = cross_validated_category
+                        final_display_category = cross_validated_category
+                        detection_source = "Cross-validated"
+                        logger.info(f"Cross-validation corrected: '{display_category}' -> '{final_display_category}'")
+            
+            # Price prediction and risk calculation
+            price = self.price_predictor.predict_price(final_price_category)
+            risk_level = calculate_risk_level(final_price_category, det.confidence)
+            
+            return FullPrediction(
+                id=generate_unique_id(),
+                category=final_display_category,
+                confidence=det.confidence,
+                regression_result=price,
+                description=description,
+                bbox=det.bbox,
+                suggestion=suggestions,
+                risk_lvl=risk_level,
+                damage_level=damage_level,
+                detection_source=detection_source
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing detection {display_category}: {str(e)}")
+            # Return basic prediction on error
+            price = self.price_predictor.predict_price(price_category)
+            risk_level = calculate_risk_level(price_category, det.confidence)
+            
+            return FullPrediction(
+                id=generate_unique_id(),
+                category=display_category,
+                confidence=det.confidence,
+                regression_result=price,
+                description=f"Perangkat elektronik {display_category.lower()}",
+                bbox=det.bbox,
+                suggestion=[
+                    "Periksa panduan manufacturer",
+                    "Pisahkan komponen berbahaya",
+                    "Bawa ke pusat daur ulang e-waste"
+                ],
+                risk_lvl=risk_level,
+                damage_level=None,
+                detection_source="YOLO (error fallback)"
+            )
+        finally:
+            # Cleanup cropped image
+            if cropped_path and os.path.exists(cropped_path):
+                os.remove(cropped_path)
     
     async def detect_objects_only(self, image_bytes: bytes) -> ObjectResponse:
         """

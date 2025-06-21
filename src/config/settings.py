@@ -26,24 +26,29 @@ ENCODER_PATH = os.path.join(MODELS_DIR, "encoder_target.joblib")
 # API Configuration
 API_TITLE = "E-Waste Detection API"
 API_DESCRIPTION = "Production API for e-waste detection with YOLO, pricing"
-API_VERSION = "1.0.0"
+API_VERSION = "3.0.0"
 HOST = "0.0.0.0"
 PORT = 8080
 
 # Gemini Configuration
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-GEMINI_MODEL = 'gemini-1.5-flash'
+GEMINI_MODEL = 'gemini-2.5-flash'
 GEMINI_MAX_TOKENS = 2048
-GEMINI_TEMPERATURE = 0.1
+GEMINI_TEMPERATURE = 0.3
 GEMINI_TOP_P = 0.8
-GEMINI_MAX_WORKERS = int(os.environ.get('GEMINI_MAX_WORKERS', '5'))
+GEMINI_MAX_WORKERS = int(os.environ.get('GEMINI_MAX_WORKERS', '10'))
 GEMINI_TIMEOUT = float(os.environ.get('GEMINI_TIMEOUT', '15.0'))
-GEMINI_REQUEST_TIMEOUT = float(os.environ.get('GEMINI_REQUEST_TIMEOUT', '10.0'))
+GEMINI_REQUEST_TIMEOUT = float(os.environ.get('GEMINI_REQUEST_TIMEOUT', '12.0'))
+
+# Gemini concurrency settings for better performance
+GEMINI_MAX_CONCURRENT_REQUESTS = int(os.environ.get('GEMINI_MAX_CONCURRENT_REQUESTS', '5'))
+GEMINI_BATCH_SIZE = int(os.environ.get('GEMINI_BATCH_SIZE', '3'))
 
 # Gemini feature flags for performance tuning
 GEMINI_SKIP_VALIDATION = os.environ.get('GEMINI_SKIP_VALIDATION', 'false').lower() == 'true'
 GEMINI_SKIP_DESCRIPTION = os.environ.get('GEMINI_SKIP_DESCRIPTION', 'false').lower() == 'true'
 GEMINI_SKIP_DAMAGE_ANALYSIS = os.environ.get('GEMINI_SKIP_DAMAGE_ANALYSIS', 'false').lower() == 'true'
+GEMINI_ENABLE_CROSS_VALIDATION = os.environ.get('GEMINI_ENABLE_CROSS_VALIDATION', 'true').lower() == 'true'
 
 # Detection thresholds
 LOW_CONFIDENCE_THRESHOLD = 0.5
