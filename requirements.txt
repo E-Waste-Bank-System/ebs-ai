@@ -16,7 +16,7 @@ google-generativeai
 scikit-learn
 pandas
 joblib
-scipy==1.1.5.3
+scipy==1.15.3
 category_encoders
 
 # Utilities
