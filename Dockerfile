@@ -15,21 +15,18 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create necessary directories
-RUN mkdir -p models runs/detect knr_models
-
 # Copy the model files
 COPY models/sy2.pt models/
-COPY models/model_knr_best.joblib knr_models/
-COPY models/encoder_target.joblib knr_models/
+COPY models/model_knr_best.joblib models/
+COPY models/encoder_target.joblib models/
 
 # Copy the rest of the application
 COPY . .
 
 # Set environment variables
 ENV MODEL_PATH=/app/models/sy2.pt
-ENV KNR_MODEL_PATH=/app/knr_models/model_knr_best.joblib
-ENV KNR_ENCODER_PATH=/app/knr_models/encoder_target.joblib
+ENV KNR_MODEL_PATH=/app/models/model_knr_best.joblib
+ENV KNR_ENCODER_PATH=/app/models/encoder_target.joblib
 ENV PORT=8080
 ENV DEBUG=False
 ENV PYTHONPATH=/app
