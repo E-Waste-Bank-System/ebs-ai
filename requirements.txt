@@ -16,3 +16,8 @@ scikit-learn
 pandas
 joblib
 python-dotenv
+matplotlib
+seaborn
+pytest
+pytest-asyncio
+psutil

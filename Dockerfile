@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN mkdir -p models runs/detect knr_models
 
 # Copy the model files
-COPY models/v4.pt models/
+COPY models/sy2.pt models/
 COPY models/model_knr_best.joblib knr_models/
 COPY models/encoder_target.joblib knr_models/
 
@@ -27,7 +27,7 @@ COPY models/encoder_target.joblib knr_models/
 COPY . .
 
 # Set environment variables
-ENV MODEL_PATH=/app/models/v4.pt
+ENV MODEL_PATH=/app/models/sy2.pt
 ENV KNR_MODEL_PATH=/app/knr_models/model_knr_best.joblib
 ENV KNR_ENCODER_PATH=/app/knr_models/encoder_target.joblib
 ENV PORT=8080

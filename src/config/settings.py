@@ -19,7 +19,7 @@ PROJECT_ROOT = str(Path(__file__).parent.parent.parent)
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 
 # Model paths
-YOLO_MODEL_PATH = os.path.join(MODELS_DIR, "v32.pt")
+YOLO_MODEL_PATH = os.path.join(MODELS_DIR, "sy2.pt")
 KNR_MODEL_PATH = os.path.join(MODELS_DIR, "model_knr_best.joblib")
 ENCODER_PATH = os.path.join(MODELS_DIR, "encoder_target.joblib")
 

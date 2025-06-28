@@ -14,44 +14,64 @@ def generate_unique_id() -> str:
 
 def calculate_risk_level(category: str, confidence: float) -> int:
     """
-    Calculate risk level 1-10 based on category and confidence
+    Calculate risk level 1-10 based on YOLO category and confidence
     Higher risk = more dangerous to environment/health
     """
-    # Base risk levels for different categories (1-5 scale, then doubled for 1-10)
-    base_risk = {
-        # High risk - large appliances with refrigerants/hazardous materials
-        "TV": 5, "Komponen Kulkas": 5, "AC": 5, "Mesin Cuci": 4,
-        
-        # Medium-high risk - electronics with batteries/screens
-        "Laptop": 4, "Handphone": 4, "Monitor": 4, "Microwave": 4,
-        
-        # Medium risk - electronics with some hazardous components
-        "Printer": 3, "CPU Intel": 3, "Komponen CPU": 3, "Speaker": 3,
-        "Router": 3, "Panel Surya": 3, "Camera": 3,
-        
-        # Lower risk - smaller electronics
-        "Keyboard": 2, "Mouse": 2, "Hardisk": 2, "Baterai Laptop": 3,
-        "Adaptor /Kilo": 2, "Flashdisk": 2, "Remot": 2,
-        
-        # Variable risk based on type
-        "Lampu": 2, "Kipas": 2, "Senter": 2, "Jam Tangan": 2,
-        "Seterika": 3, "Hair Dryer": 3, "Kompor Listrik": 4,
-        "Oven": 4, "Solder": 3, "Alat Tensi": 2, "Alat Tes Vol": 2,
-        "PS2": 3, "Telefon": 2, "Vacum Cleaner": 3, "Neon Box": 3,
-        "Aki Motor": 4
+    # Risk levels based on YOLO class names (1-5 base scale)
+    # Categories with high environmental/health risks
+    high_risk_categories = {
+        "Television", "Fridge", "Microwave", "Washing Machine", 
+        "Rice Cooker", "Iron"
     }
     
-    # Get base risk (default to 3 for unknown categories)
-    risk = base_risk.get(category, 3)
+    # Categories with medium-high risks (batteries, screens, complex electronics)
+    medium_high_risk_categories = {
+        "Laptop", "Phone", "Monitor", "Battery", "Powerbank",
+        "GPU", "Motherboard", "PC Case", "CPU Component"
+    }
     
-    # Adjust based on confidence
+    # Categories with medium risks (general electronics)
+    medium_risk_categories = {
+        "Printer", "Speaker", "Router", "Solar Panel", "DVD Player",
+        "Radio", "Microphone", "Harddisk", "Stick Ps"
+    }
+    
+    # Categories with lower risks (peripherals, small devices)
+    low_risk_categories = {
+        "Keyboard", "Mouse", "Charger", "Electronic Socket", "Cables",
+        "Calculator", "Clock", "Walkie Talkie", "Body Weight Scale", "Remote"
+    }
+    
+    # Categories with minimal risks (simple devices)
+    minimal_risk_categories = {
+        "Fan", "Lamp", "Flashlight"
+    }
+    
+    # Determine base risk level
+    if category in high_risk_categories:
+        base_risk = 5
+    elif category in medium_high_risk_categories:
+        base_risk = 4
+    elif category in medium_risk_categories:
+        base_risk = 3
+    elif category in low_risk_categories:
+        base_risk = 2
+    elif category in minimal_risk_categories:
+        base_risk = 1
+    else:
+        # Unknown category - assign medium risk
+        base_risk = 3
+    
+    # Adjust based on confidence level
     if confidence < LOW_CONFIDENCE_THRESHOLD:
-        risk = min(5, risk + 1)  # Increase risk if low confidence
+        # Low confidence increases risk (uncertainty is risky)
+        base_risk = min(5, base_risk + 1)
     elif confidence > 0.9:
-        risk = max(1, risk - 1)  # Decrease risk if very high confidence
+        # Very high confidence slightly reduces risk
+        base_risk = max(1, base_risk - 1)
     
-    # Scale to 1-10 and ensure bounds
-    scaled_risk = risk * 2
+    # Scale to 1-10 range
+    scaled_risk = base_risk * 2
     return min(10, max(1, scaled_risk))
 
 
