@@ -10,8 +10,7 @@ import time
 import asyncio
 import re
 from typing import List, Dict, Any, Optional, Tuple
-from PIL import Image, ImageDraw, ImageFont
-import numpy as np
+from PIL import Image
 
 from src.config.settings import (
     YOLO_AVAILABLE, YOLO_MODEL_PATH, LOW_CONFIDENCE_THRESHOLD,
@@ -24,7 +23,10 @@ from src.models.response_models import (
 from src.models.yolo_detector import YOLODetector
 from src.models.price_predictor import PricePredictor
 from src.services.gemini_service import GeminiService
-from src.utils.helpers import generate_unique_id, calculate_risk_level
+from src.utils.helpers import (
+    generate_unique_id, calculate_risk_level, create_fallback_prediction,
+    safe_execute, log_execution_time
+)
 from src.utils.mappings import get_mapped_category, is_valid_price_category
 
 logger = logging.getLogger(__name__)
@@ -136,13 +138,6 @@ class DetectionService:
         return description
     
 
-    
-    def _get_category_color(self, category: str) -> Tuple[int, int, int]:
-        """Assign a unique color to each category using a hash."""
-        import random
-        random.seed(hash(category) & 0xFFFFFFFF)
-        return tuple(random.randint(64, 255) for _ in range(3))
-
     def _save_cropped_bbox(self, image_path: str, bbox: List[float], label: str) -> str:
         """
         Crop the image to the bounding box and save to a temp file. Returns the file path.
@@ -158,14 +153,19 @@ class DetectionService:
 
     def _is_valid_crop(self, crop_path: str, min_size: int = 32) -> bool:
         """Check if the cropped image is large enough for Gemini."""
-        try:
-            with Image.open(crop_path) as img:
-                width, height = img.size
-                return width >= min_size and height >= min_size
-        except Exception as e:
-            logger.warning(f"Failed to open crop image {crop_path}: {e}")
-            return False
+        return safe_execute(
+            lambda: self._check_image_size(crop_path, min_size),
+            False,
+            f"Failed to validate crop image {crop_path}"
+        )
+    
+    def _check_image_size(self, crop_path: str, min_size: int) -> bool:
+        """Helper method to check image size"""
+        with Image.open(crop_path) as img:
+            width, height = img.size
+            return width >= min_size and height >= min_size
 
+    @log_execution_time("Complete image processing")
     async def process_image_complete(
         self, 
         image_bytes: bytes,
@@ -242,9 +242,7 @@ class DetectionService:
         image_path: str, 
         all_detections: List[Detection]
     ) -> FullPrediction:
-        """
-        Process a single detection with optimized parallel Gemini calls
-        """
+        """Process a single detection with optimized parallel Gemini calls"""
         # Keep original category for display
         display_category = det.category
         
@@ -252,6 +250,11 @@ class DetectionService:
         price_category = get_mapped_category(det.category)
         logger.info(f"Processing '{display_category}' -> '{price_category}'")
         
+        # For critical mappings, add extra protection
+        if display_category.lower() == "phone" and price_category != "Handphone":
+            logger.error(f"CRITICAL: Phone mapping error detected! Expected 'Handphone', got '{price_category}'")
+            price_category = "Handphone"  # Force correct mapping
+            
         # Crop the detection
         cropped_path = self._save_cropped_bbox(image_path, det.bbox, det.category)
         
@@ -261,24 +264,15 @@ class DetectionService:
                 logger.warning(f"Small crop for {display_category}, using fallback processing")
                 
                 # For small crops, do minimal processing
-                price = self.price_predictor.predict_price(price_category)
-                risk_level = calculate_risk_level(price_category, det.confidence)
+                price = safe_execute(
+                    self.price_predictor.predict_price,
+                    None,
+                    f"Price prediction failed for {price_category}",
+                    price_category
+                )
                 
-                return FullPrediction(
-                    id=generate_unique_id(),
-                    category=display_category,
-                    confidence=det.confidence,
-                    regression_result=price,
-                    description=f"Perangkat elektronik {display_category.lower()}",
-                    bbox=det.bbox,
-                    suggestion=[
-                        "Periksa panduan manufacturer",
-                        "Pisahkan komponen berbahaya",
-                        "Bawa ke pusat daur ulang e-waste"
-                    ],
-                    risk_lvl=risk_level,
-                    damage_level=None,
-                    detection_source="YOLO (small crop)"
+                return create_fallback_prediction(
+                    display_category, det.confidence, det.bbox, price, "YOLO (small crop)"
                 )
             
             # Prepare context for Gemini
@@ -291,8 +285,11 @@ class DetectionService:
                 "focus_label": display_category
             }
             
-            # Use batch processing for all Gemini operations - THIS IS THE KEY OPTIMIZATION
-            batch_result = await self.gemini_service.process_batch_analysis(
+            # Use batch processing for all Gemini operations
+            batch_result = await safe_execute(
+                self.gemini_service.process_batch_analysis,
+                self._get_default_batch_result(display_category, price_category),
+                f"Gemini batch analysis failed for {display_category}",
                 cropped_path,
                 display_category,
                 yolo_prediction=det.category,
@@ -312,33 +309,39 @@ class DetectionService:
             damage_level = batch_result.get("damage_level")
             
             # Determine final categories based on validation
-            final_display_category = display_category
-            final_price_category = price_category
-            detection_source = "YOLO"
+            final_display_category, final_price_category, detection_source = self._determine_final_categories(
+                validation, display_category, price_category, description
+            )
             
-            if validation and validation.is_valid:
-                if validation.final_category and validation.final_category != price_category:
-                    final_price_category = validation.final_category
-                    final_display_category = validation.final_category
-                    logger.info(f"Gemini corrected: '{display_category}' -> '{final_display_category}'")
-                detection_source = validation.detection_source
-            elif validation and not validation.is_valid:
-                logger.warning(f"Gemini rejected detection: {validation.gemini_feedback}")
-                detection_source = "Rejected"
-            else:
-                # Fallback: Use cross-validation with description if Gemini validation didn't work
-                if GEMINI_ENABLE_CROSS_VALIDATION:
-                    cross_validated_category = await self.gemini_service.cross_validate_category(
-                        description, display_category, price_category
-                    )
-                    if cross_validated_category != price_category:
-                        final_price_category = cross_validated_category
-                        final_display_category = cross_validated_category
-                        detection_source = "Cross-validated"
-                        logger.info(f"Cross-validation corrected: '{display_category}' -> '{final_display_category}'")
+            # CRITICAL SAFEGUARD: For Phone detections, ensure we don't end up with wrong categories
+            if display_category.lower() == "phone":
+                if final_price_category not in ["Handphone", "Telefon"]:
+                    logger.error(f"CRITICAL: Phone validation resulted in wrong category '{final_price_category}', forcing to 'Handphone'")
+                    final_price_category = "Handphone"
+                    final_display_category = "Phone"
+                    detection_source = "YOLO (corrected)"
+                    
+                # If it's Telefon but original was Phone, validate this is correct
+                if final_price_category == "Telefon":
+                    logger.warning(f"Phone -> Telefon conversion detected. Checking if this is a walkie-talkie...")
+                    # For now, prefer Handphone for Phone detections unless there's strong evidence
+                    if "walkie" not in description.lower() and "radio" not in description.lower():
+                        logger.info("No walkie-talkie evidence found, keeping as Handphone")
+                        final_price_category = "Handphone"
+                        final_display_category = "Phone"
+                        detection_source = "YOLO (corrected)"
             
             # Price prediction and risk calculation
-            price = self.price_predictor.predict_price(final_price_category)
+            price = safe_execute(
+                self.price_predictor.predict_price,
+                None,
+                f"Price prediction failed for {final_price_category}",
+                final_price_category
+            )
+            
+            # Log the final result for debugging
+            logger.info(f"Final prediction: {display_category} -> {final_display_category}, price_category: {final_price_category}, price: {price}, source: {detection_source}")
+            
             risk_level = calculate_risk_level(final_price_category, det.confidence)
             
             return FullPrediction(
@@ -357,30 +360,78 @@ class DetectionService:
         except Exception as e:
             logger.error(f"Error processing detection {display_category}: {str(e)}")
             # Return basic prediction on error
-            price = self.price_predictor.predict_price(price_category)
-            risk_level = calculate_risk_level(price_category, det.confidence)
+            price = safe_execute(
+                self.price_predictor.predict_price,
+                None,
+                f"Fallback price prediction failed for {price_category}",
+                price_category
+            )
             
-            return FullPrediction(
-                id=generate_unique_id(),
-                category=display_category,
-                confidence=det.confidence,
-                regression_result=price,
-                description=f"Perangkat elektronik {display_category.lower()}",
-                bbox=det.bbox,
-                suggestion=[
-                    "Periksa panduan manufacturer",
-                    "Pisahkan komponen berbahaya",
-                    "Bawa ke pusat daur ulang e-waste"
-                ],
-                risk_lvl=risk_level,
-                damage_level=None,
-                detection_source="YOLO (error fallback)"
+            return create_fallback_prediction(
+                display_category, det.confidence, det.bbox, price, "YOLO (error fallback)"
             )
         finally:
             # Cleanup cropped image
             if cropped_path and os.path.exists(cropped_path):
                 os.remove(cropped_path)
     
+    def _get_default_batch_result(self, display_category: str, price_category: str) -> Dict[str, Any]:
+        """Get default batch result for fallback scenarios"""
+        return {
+            "validation": ValidationResult(
+                is_valid=True,
+                final_category=price_category,
+                detection_source="YOLO",
+                gemini_feedback="Batch processing fallback"
+            ),
+            "description": f"Perangkat elektronik {display_category.lower()}",
+            "suggestions": [
+                "Periksa panduan manufacturer",
+                "Pisahkan komponen berbahaya",
+                "Bawa ke pusat daur ulang e-waste"
+            ],
+            "damage_level": None
+        }
+    
+    def _determine_final_categories(
+        self, 
+        validation: Optional[ValidationResult], 
+        display_category: str, 
+        price_category: str, 
+        description: str
+    ) -> Tuple[str, str, str]:
+        """Determine final categories and detection source based on validation results"""
+        final_display_category = display_category
+        final_price_category = price_category
+        detection_source = "YOLO"
+        
+        if validation and validation.is_valid:
+            if validation.final_category and validation.final_category != price_category:
+                final_price_category = validation.final_category
+                final_display_category = validation.final_category
+                logger.info(f"Gemini corrected: '{display_category}' -> '{final_display_category}'")
+            detection_source = validation.detection_source
+        elif validation and not validation.is_valid:
+            logger.warning(f"Gemini rejected detection: {validation.gemini_feedback}")
+            detection_source = "Rejected"
+        else:
+            # Fallback: Use cross-validation with description if Gemini validation didn't work
+            if GEMINI_ENABLE_CROSS_VALIDATION:
+                cross_validated_category = safe_execute(
+                    self.gemini_service.cross_validate_category,
+                    price_category,
+                    f"Cross-validation failed for {display_category}",
+                    description, display_category, price_category
+                )
+                if cross_validated_category != price_category:
+                    final_price_category = cross_validated_category
+                    final_display_category = cross_validated_category
+                    detection_source = "Cross-validated"
+                    logger.info(f"Cross-validation corrected: '{display_category}' -> '{final_display_category}'")
+        
+        return final_display_category, final_price_category, detection_source
+    
+    @log_execution_time("YOLO detection only")
     async def detect_objects_only(self, image_bytes: bytes) -> ObjectResponse:
         """
         YOLO detection only

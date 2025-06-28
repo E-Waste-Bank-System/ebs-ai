@@ -312,16 +312,29 @@ JSON only:
     
     def _create_validation_prompt(self, yolo_prediction: str, mapped_category: str) -> str:
         """Create optimized validation prompt for Gemini"""
+        # Get the actual price categories dynamically
+        from src.utils.mappings import PRICE_CATEGORIES
+        categories_list = ", ".join(sorted(list(PRICE_CATEGORIES)))
+        
         return f"""YOLO AI detected: {yolo_prediction}
+Mapped to price category: {mapped_category}
 
 Look at this image carefully. What electronic device do you actually see?
-Choose the EXACT category name from this list:
-Baterai, Timbangan Badan, Kalkulator, Jam, Pemutar DVD, DVD ROM, Stopkontak, Kipas Angin, Senter, Kulkas, GPU (Kartu Grafis), Telepon Genggam, Harddisk, Pembasmi Serangga, Setrika, Papan Ketik, Lampu, Laptop, Charger Laptop, Mikrofon, Microwave, Monitor, Papan Induk, Tetikus, Casing PC, Catu Daya, Powerbank, Pencetak, Tinta Printer, Radio, Penanak Nasi, Router, Panel Surya, Pengeras Suara, Televisi, Pemanggang Roti, Walkie Talkie, Mesin Cuci
 
-IMPORTANT: You must provide the exact category name from the list above, or "null" if it's not electronic waste, or try to identify the e-waste from the image if you can't find the category in the list.
+Choose the EXACT category name from this price model list:
+{categories_list}
+
+IMPORTANT GUIDELINES:
+- For smartphones/mobile phones → use "Handphone"
+- For walkie-talkies/two-way radios → use "Telefon"
+- For regular computers → use "Laptop" or "CPU Intel"
+- For gaming consoles → use "PS2"
+
+If the YOLO detection and mapping are correct, you can confirm by returning the mapped category.
+If it's not electronic waste, return "null".
 
 JSON format only:
-{{"is_valid_ewaste": true/false, "best_category": "exact category name from list or null or try to identify the e-waste from the image if you can't find the category in the list", "reasoning": "what device you see"}}"""
+{{"is_valid_ewaste": true/false, "best_category": "exact category name from list above or null", "reasoning": "brief description of what you see"}}"""
     
     def _process_validation_response(
         self, 
@@ -376,16 +389,8 @@ JSON format only:
                     gemini_feedback=f"Not valid e-waste: {reasoning}"
                 )
             elif best_category and best_category != "null" and is_valid_price_category(best_category):
-                # Gemini provided a valid category - use it regardless of whether it matches mapped_category
-                if best_category != mapped_category:
-                    logger.info(f"Gemini correction: {yolo_prediction} -> {best_category} (was mapped to {mapped_category})")
-                    return ValidationResult(
-                        is_valid=True,
-                        final_category=best_category,
-                        detection_source="Gemini Interfered",
-                        gemini_feedback=f"Corrected from {yolo_prediction} to {best_category}: {reasoning}"
-                    )
-                else:
+                # Gemini provided a valid category - but let's be smart about it
+                if best_category == mapped_category:
                     # Gemini confirmed the mapping is correct
                     return ValidationResult(
                         is_valid=True,
@@ -393,13 +398,69 @@ JSON format only:
                         detection_source="YOLO",
                         gemini_feedback=f"Category confirmed: {reasoning}"
                     )
+                else:
+                    # Gemini suggests a different category - validate this change
+                    # Special handling for known good mappings
+                    yolo_lower = yolo_prediction.lower()
+                    best_lower = best_category.lower()
+                    mapped_lower = mapped_category.lower()
+                    
+                    # Don't override well-established mappings unless there's strong reason
+                    questionable_overrides = [
+                        (yolo_lower == "phone" and best_lower == "telefon" and mapped_lower == "handphone"),
+                        (yolo_lower == "laptop" and best_category != "Laptop"),
+                        (yolo_lower == "monitor" and best_category != "Monitor"),
+                        (yolo_lower == "keyboard" and best_category != "Keyboard"),
+                        (yolo_lower == "mouse" and best_category != "Mouse"),
+                    ]
+                    
+                    if any(questionable_overrides):
+                        logger.warning(f"Gemini suggested questionable override: {yolo_prediction} -> {best_category}, keeping mapped: {mapped_category}")
+                        return ValidationResult(
+                            is_valid=True,
+                            final_category=mapped_category,
+                            detection_source="YOLO",
+                            gemini_feedback=f"Kept original mapping {mapped_category} over Gemini suggestion {best_category}: {reasoning}"
+                        )
+                    else:
+                        # Accept Gemini's suggestion for other cases
+                        logger.info(f"Gemini correction: {yolo_prediction} -> {best_category} (was mapped to {mapped_category})")
+                        return ValidationResult(
+                            is_valid=True,
+                            final_category=best_category,
+                            detection_source="Gemini Interfered",
+                            gemini_feedback=f"Corrected from {yolo_prediction} to {best_category}: {reasoning}"
+                        )
             else:
                 # No valid category provided or category not in our list - use mapped category
                 # But first check if we can extract useful information from the reasoning
                 if best_category == "null" or best_category is None:
                     logger.warning(f"Gemini couldn't identify a valid category. Reasoning: '{reasoning}'")
                     
-                    # Try to extract category hints from the reasoning text
+                    # For well-known good mappings, don't try reasoning extraction - just use the mapping
+                    yolo_lower = yolo_prediction.lower()
+                    well_known_mappings = [
+                        yolo_lower == "phone",
+                        yolo_lower == "laptop", 
+                        yolo_lower == "monitor",
+                        yolo_lower == "keyboard",
+                        yolo_lower == "mouse",
+                        yolo_lower == "printer",
+                        yolo_lower == "speaker",
+                        yolo_lower == "battery",
+                        yolo_lower == "charger"
+                    ]
+                    
+                    if any(well_known_mappings):
+                        logger.info(f"Using mapped category for well-known device: {yolo_prediction} -> {mapped_category}")
+                        return ValidationResult(
+                            is_valid=True,
+                            final_category=mapped_category,
+                            detection_source="YOLO",
+                            gemini_feedback=f"Used mapped category for well-known device. Gemini reasoning: {reasoning}"
+                        )
+                    
+                    # Try to extract category hints from the reasoning text only for unknown devices
                     reasoning_lower = reasoning.lower() if reasoning else ""
                     potential_categories = []
                     
@@ -412,16 +473,40 @@ JSON format only:
                         "tv": "TV",
                         "monitor": "Monitor",
                         "laptop": "Laptop",
-                        "computer": "Komputer",
+                        "computer": "CPU Intel",
                         "smartphone": "Handphone",
                         "phone": "Handphone",
+                        "mobile": "Handphone",
+                        "ponsel": "Handphone",
+                        "handphone": "Handphone",
                         "printer": "Printer",
-                        "scanner": "Scanner",
+                        "scanner": "Printer",
                         "speaker": "Speaker",
-                        "radio": "Radio",
+                        "radio": "Speaker",
                         "microwave": "Microwave",
-                        "refrigerator": "Kulkas",
-                        "fridge": "Kulkas"
+                        "refrigerator": "Komponen Kulkas",
+                        "fridge": "Komponen Kulkas",
+                        "kulkas": "Komponen Kulkas",
+                        "keyboard": "Keyboard",
+                        "mouse": "Mouse",
+                        "battery": "Baterai Laptop",
+                        "baterai": "Baterai Laptop",
+                        "charger": "Adaptor /Kilo",
+                        "adaptor": "Adaptor /Kilo",
+                        "cables": "Adaptor /Kilo",
+                        "kabel": "Adaptor /Kilo",
+                        "iron": "Seterika",
+                        "setrika": "Seterika",
+                        "fan": "Kipas",
+                        "kipas": "Kipas",
+                        "lamp": "Lampu",
+                        "lampu": "Lampu",
+                        "router": "Router",
+                        "walkie talkie": "Telefon",
+                        "two way radio": "Telefon",
+                        "hard disk": "Hardisk",
+                        "harddisk": "Hardisk",
+                        "storage": "Hardisk"
                     }
                     
                     for hint, category in device_hints.items():

@@ -12,7 +12,6 @@ sys.path.append(project_root)
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from src.config.settings import API_TITLE, API_DESCRIPTION, API_VERSION, HOST, PORT
 from src.services.detection_service import DetectionService
