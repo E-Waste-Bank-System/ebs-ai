@@ -22,7 +22,7 @@ category_encoders==2.6.1
 # Utilities
 python-dotenv
 matplotlib
-seabor
+seaborn
 
 # Testing
 pytest
