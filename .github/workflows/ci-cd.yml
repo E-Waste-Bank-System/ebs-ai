@@ -133,7 +133,7 @@ jobs:
           env_vars: |
             ENABLE_GCS=true
             GCS_BUCKET=ebs-storage
-            MODEL_PATH=models/sy2.pt
+            MODEL_PATH=models/v5.pt
             GEMINI_API_KEY=AIzaSyBI-WX9MQaiWyMwmwHoZS48gNu0e9Pu6P0
             KNR_MODEL_PATH=models/model_knr_best.joblib
             KNR_ENCODER_PATH=models/encoder_target.joblib
