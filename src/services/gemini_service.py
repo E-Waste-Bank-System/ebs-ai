@@ -1,6 +1,9 @@
 """
 Gemini AI Service Module
 Handles validation using Google's Gemini with performance optimizations
+
+Flow: YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
+Gemini validates YOLO categories (37 classes) before mapping to price categories (33 classes)
 """
 
 import json
@@ -16,14 +19,14 @@ from src.config.settings import (
     GEMINI_TIMEOUT, GEMINI_REQUEST_TIMEOUT, GEMINI_MAX_CONCURRENT_REQUESTS,
     GEMINI_BATCH_SIZE, GEMINI_ENABLE_CROSS_VALIDATION
 )
-from src.utils.mappings import PRICE_CATEGORIES, is_valid_price_category
+from src.utils.mappings import CLASS_NAMES, get_all_yolo_classes
 from src.models.response_models import ValidationResult
 
 logger = logging.getLogger(__name__)
 
 
 class GeminiService:
-    """Gemini AI Service for validation with performance optimizations"""
+    """Gemini AI Service for YOLO detection validation with performance optimizations"""
     
     def __init__(self):
         self.model = None
@@ -50,47 +53,51 @@ class GeminiService:
                 logger.error(f"Failed to initialize Gemini: {str(e)}")
                 self.is_available = False
     
-    async def validate_detection(
+    async def validate_yolo_detection(
         self, 
         image_path: str, 
-        yolo_prediction: str, 
-        mapped_category: str,
+        yolo_prediction: str,
+        yolo_confidence: float,
         extra_image_path: str = None,
         prompt_context: dict = None
     ) -> ValidationResult:
         """
-        Validate YOLO detection using Gemini vision, with optional extra image and context.
+        Validate YOLO detection using Gemini vision.
+        
+        Args:
+            image_path: Path to cropped detection image
+            yolo_prediction: YOLO's predicted category (from 37 YOLO classes)
+            yolo_confidence: YOLO's confidence score
+            extra_image_path: Optional additional image for context
+            prompt_context: Optional context with all detections
+            
+        Returns:
+            ValidationResult with confirmed/corrected YOLO category
         """
         if not self.is_available or self.model is None:
             logger.warning("Gemini not available, using YOLO prediction")
             return ValidationResult(
                 is_valid=True,
-                final_category=mapped_category,
+                final_category=yolo_prediction,
                 detection_source="YOLO",
                 gemini_feedback="Gemini validation unavailable"
             )
+        
         try:
             images = [Image.open(image_path)]
             if extra_image_path:
                 images.append(Image.open(extra_image_path))
-            # Build prompt
-            if prompt_context:
-                prompt = f"""YOLO detected: {yolo_prediction}
-
-What electronic device do you actually see? Choose best category:
-{', '.join(list(PRICE_CATEGORIES)[:15])}...
-
-JSON only:
-{{"is_valid_ewaste": true/false, "best_category": "exact category name or null", "reasoning": "what you see"}}"""
-            else:
-                prompt = self._create_validation_prompt(yolo_prediction, mapped_category)
-            # Gemini call
+            
+            # Build intelligent prompt for YOLO category validation
+            prompt = self._create_yolo_validation_prompt(yolo_prediction, yolo_confidence, prompt_context)
+            
+            # Gemini call with timeout
             response = await self._call_gemini_with_timeout(prompt, images)
             if not response:
                 logger.warning("Empty Gemini validation response")
                 return ValidationResult(
                     is_valid=True,
-                    final_category=mapped_category,
+                    final_category=yolo_prediction,
                     detection_source="YOLO",
                     gemini_feedback="Gemini validation failed - empty response"
                 )
@@ -98,33 +105,46 @@ JSON only:
             # Log the raw response for debugging
             logger.debug(f"Raw Gemini validation response: {response[:200]}...")
             
-            return self._process_validation_response(
-                response, mapped_category, yolo_prediction
+            return self._process_yolo_validation_response(
+                response, yolo_prediction
             )
+            
         except Exception as e:
             logger.error(f"Gemini validation error: {str(e)}")
             return ValidationResult(
                 is_valid=True,
-                final_category=mapped_category,
+                final_category=yolo_prediction,
                 detection_source="YOLO",
                 gemini_feedback=f"Gemini validation error: {str(e)}"
             )
 
     async def generate_description(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> str:
         """
-        Generate concise description (10-15 words) using Gemini vision based on e-waste condition, with optional extra image and context.
+        Generate concise description (10-15 words) using Gemini vision based on e-waste condition.
+        
+        Args:
+            image_path: Path to cropped detection image
+            category: Final category name (can be YOLO or price category)
+            extra_image_path: Optional additional image for context
+            prompt_context: Optional context information
+            
+        Returns:
+            Indonesian description of the e-waste item (10-15 words)
         """
         if not self.is_available or self.model is None:
-            return f"Perangkat elektronik {category.lower()}"
+            return f"Perangkat elektronik {category.lower()} dalam kondisi tidak diketahui"
+        
         try:
             images = [Image.open(image_path)]
             if extra_image_path:
                 images.append(Image.open(extra_image_path))
             
-            # Optimized prompt for speed
-            prompt = f"""Describe this {category} in Indonesian (max 10 words):
-Focus: condition, damage.
-Example: "Laptop rusak layar retak"
+            # Optimized prompt for specific word count
+            prompt = f"""Describe this {category} in Indonesian (EXACTLY 10-15 words):
+Focus: condition, damage level, visible wear.
+Format: "[device] [condition description]"
+Example: "Laptop rusak layar retak baterai bocor casing tergores kondisi buruk"
+IMPORTANT: Must be between 10-15 words, no more, no less.
 """
             
             response = await self._call_gemini_with_timeout(prompt, images)
@@ -137,42 +157,79 @@ Example: "Laptop rusak layar retak"
                 if '\n' in description:
                     description = description.split('\n')[0].strip()
                 
-                # Clean up the description
-                if description and len(description) > 5:
+                # Count words and validate length
+                words = description.split()
+                word_count = len(words)
+                
+                if 10 <= word_count <= 15:
+                    logger.info(f"Generated description ({word_count} words): {description}")
                     return description
-                else:
-                    logger.warning("Empty or very short description from Gemini")
+                elif word_count < 10:
+                    # Too short, pad with generic terms
+                    padding_words = ["terdeteksi", "dalam", "sistem", "pemeriksaan", "visual", "analisis"]
+                    while len(words) < 10 and padding_words:
+                        words.append(padding_words.pop(0))
+                    description = " ".join(words[:15])  # Cap at 15 words
+                    logger.info(f"Padded short description to {len(words)} words: {description}")
+                    return description
+                elif word_count > 15:
+                    # Too long, truncate to 15 words
+                    description = " ".join(words[:15])
+                    logger.info(f"Truncated long description to 15 words: {description}")
+                    return description
             else:
                 logger.warning("No response text from Gemini for description")
             
-            # Fallback description
-            return f"{category} elektronik terdeteksi"
+            # Fallback description (exactly 10 words)
+            fallback = f"Perangkat elektronik {category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis"
+            return " ".join(fallback.split()[:15])  # Ensure max 15 words
         except Exception as e:
             logger.error(f"Gemini description error: {str(e)}")
-            return f"{category} elektronik terdeteksi"
+            # Fallback description (exactly 10 words)
+            fallback = f"Perangkat elektronik {category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis"
+            return " ".join(fallback.split()[:15])  # Ensure max 15 words
 
     async def generate_suggestions(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> List[str]:
         """
-        Generate disposal suggestions using Gemini vision based on e-waste condition, with optional extra image and context.
+        Generate disposal suggestions using Gemini vision based on e-waste condition.
+        
+        Args:
+            image_path: Path to cropped detection image
+            category: Final category name
+            extra_image_path: Optional additional image for context
+            prompt_context: Optional context information
+            
+        Returns:
+            List of 3 disposal suggestions in Indonesian (5-7 words each)
         """
         default_suggestions = [
-            "Periksa panduan manufacturer",
-            "Pisahkan komponen berbahaya",
-            "Bawa ke pusat daur ulang e-waste"
+            "Periksa panduan dari manufacturer resmi",        # 6 words
+            "Pisahkan komponen berbahaya dengan hati hati",  # 7 words
+            "Bawa ke pusat daur ulang terdekat"              # 7 words
         ]
         if not self.is_available or self.model is None:
             return default_suggestions
+        
         try:
             images = [Image.open(image_path)]
             if extra_image_path:
                 images.append(Image.open(extra_image_path))
             
-            # Optimized prompt for speed
+            # Optimized prompt for specific word count
             prompt = f"""3 disposal steps for {category} in Indonesian:
-1. [step 1 - max 6 words]
-2. [step 2 - max 6 words] 
-3. [step 3 - max 6 words]
-"""
+            Each step must be EXACTLY 5-7 words.
+            Format:
+            1. [action - 5-7 words]
+            2. [action - 5-7 words] 
+            3. [action - 5-7 words]
+
+            Example:
+            1. Periksa panduan dari manufacturer resmi
+            2. Pisahkan komponen berbahaya dengan hati
+            3. Bawa ke pusat daur ulang
+
+            IMPORTANT: Each suggestion must be 5-7 words only. No markdown elements.
+            """
             
             response = await self._call_gemini_with_timeout(prompt, images)
             if response:
@@ -191,8 +248,27 @@ Example: "Laptop rusak layar retak"
                         parts = line.split('.', 1)
                         if len(parts) > 1 and parts[1].strip():
                             suggestion = parts[1].strip()
-                            if suggestion:  # Only add non-empty suggestions
-                                suggestions.append(suggestion)
+                            if suggestion:
+                                # Validate word count (5-7 words)
+                                words = suggestion.split()
+                                word_count = len(words)
+                                
+                                if 5 <= word_count <= 7:
+                                    suggestions.append(suggestion)
+                                    logger.info(f"Valid suggestion ({word_count} words): {suggestion}")
+                                elif word_count < 5:
+                                    # Too short, pad with generic terms
+                                    padding_words = ["dengan", "cara", "yang", "benar", "sesuai", "aturan"]
+                                    while len(words) < 5 and padding_words:
+                                        words.append(padding_words.pop(0))
+                                    suggestion = " ".join(words[:7])  # Cap at 7 words
+                                    suggestions.append(suggestion)
+                                    logger.info(f"Padded short suggestion to {len(words)} words: {suggestion}")
+                                elif word_count > 7:
+                                    # Too long, truncate to 7 words
+                                    suggestion = " ".join(words[:7])
+                                    suggestions.append(suggestion)
+                                    logger.info(f"Truncated long suggestion to 7 words: {suggestion}")
                 
                 # If we didn't find numbered suggestions, try to parse without numbers
                 if not suggestions:
@@ -204,21 +280,65 @@ Example: "Laptop rusak layar retak"
                                 if line.startswith(prefix):
                                     line = line[len(prefix):].strip()
                                     break
-                            if line and len(line) > 5:
-                                suggestions.append(line)
+                            if line:
+                                # Validate word count (5-7 words)
+                                words = line.split()
+                                word_count = len(words)
+                                
+                                if 5 <= word_count <= 7:
+                                    suggestions.append(line)
+                                elif word_count < 5:
+                                    # Too short, pad
+                                    padding_words = ["dengan", "cara", "yang", "benar"]
+                                    while len(words) < 5 and padding_words:
+                                        words.append(padding_words.pop(0))
+                                    suggestion = " ".join(words[:7])
+                                    suggestions.append(suggestion)
+                                elif word_count > 7:
+                                    # Too long, truncate
+                                    suggestion = " ".join(words[:7])
+                                    suggestions.append(suggestion)
                 
-                # Ensure we have exactly 3 suggestions
-                if len(suggestions) > 3:
-                    suggestions = suggestions[:3]
-                elif len(suggestions) < 3:
-                    # Fill with defaults if fewer than 3
-                    while len(suggestions) < 3:
-                        if len(suggestions) < len(default_suggestions):
-                            suggestions.append(default_suggestions[len(suggestions)])
-                        else:
-                            suggestions.append("Bawa ke pusat daur ulang e-waste")
+                # Ensure we have exactly 3 suggestions with proper word counts
+                validated_suggestions = []
+                for suggestion in suggestions[:3]:  # Take first 3
+                    words = suggestion.split()
+                    if len(words) < 5:
+                        # Pad to minimum 5 words
+                        padding = ["dengan", "cara", "yang", "benar", "sesuai"]
+                        while len(words) < 5:
+                            if padding:
+                                words.append(padding.pop(0))
+                            else:
+                                break
+                    elif len(words) > 7:
+                        # Truncate to maximum 7 words
+                        words = words[:7]
+                    
+                    validated_suggestions.append(" ".join(words))
                 
-                return suggestions[:3]
+                # Fill with defaults if we don't have 3 suggestions
+                while len(validated_suggestions) < 3:
+                    if len(validated_suggestions) < len(default_suggestions):
+                        validated_suggestions.append(default_suggestions[len(validated_suggestions)])
+                    else:
+                        validated_suggestions.append("Bawa ke pusat daur ulang terdekat")
+                
+                # Final validation: ensure all suggestions are 5-7 words
+                final_suggestions = []
+                for suggestion in validated_suggestions[:3]:
+                    words = suggestion.split()
+                    if len(words) < 5:
+                        words.extend(["dengan", "cara", "yang"])
+                        words = words[:7]
+                    elif len(words) > 7:
+                        words = words[:7]
+                    final_suggestions.append(" ".join(words))
+                
+                logger.info(f"Generated {len(final_suggestions)} suggestions with proper word counts")
+                return final_suggestions[:3]
+            
+            logger.info("Using default suggestions due to generation failure")
             return default_suggestions
         except Exception as e:
             logger.error(f"Gemini suggestions error: {str(e)}")
@@ -227,7 +347,15 @@ Example: "Laptop rusak layar retak"
     async def analyze_damage_level(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> Tuple[int, str]:
         """
         Analyze damage level of e-waste using Gemini vision.
-        Returns damage level (1-10) and detailed analysis.
+        
+        Args:
+            image_path: Path to cropped detection image
+            category: Final category name
+            extra_image_path: Optional additional image for context
+            prompt_context: Optional context information
+            
+        Returns:
+            Tuple of (damage_level: 1-10, analysis: str)
         """
         if not self.is_available or self.model is None:
             return 5, "Damage analysis unavailable"
@@ -251,7 +379,7 @@ JSON only:
             
             # Parse response with robust JSON extraction
             try:
-                # More robust response cleaning (same as validation)
+                # More robust response cleaning
                 cleaned_text = response.strip()
                 
                 # Remove any text before the first { and after the last }
@@ -310,39 +438,73 @@ JSON only:
             logger.error(f"Damage analysis error: {str(e)}")
             return 5, f"Damage analysis error: {str(e)}"
     
-    def _create_validation_prompt(self, yolo_prediction: str, mapped_category: str) -> str:
-        """Create optimized validation prompt for Gemini"""
-        # Get the actual price categories dynamically
-        from src.utils.mappings import PRICE_CATEGORIES
-        categories_list = ", ".join(sorted(list(PRICE_CATEGORIES)))
+    def _create_yolo_validation_prompt(self, yolo_prediction: str, yolo_confidence: float, prompt_context: dict = None) -> str:
+        """
+        Create optimized validation prompt for YOLO category validation.
         
-        return f"""YOLO AI detected: {yolo_prediction}
-Mapped to price category: {mapped_category}
+        Args:
+            yolo_prediction: YOLO's predicted category
+            yolo_confidence: YOLO's confidence score
+            prompt_context: Optional context with all detections
+            
+        Returns:
+            Formatted prompt for Gemini validation
+        """
+        # Get all YOLO categories for the prompt
+        yolo_categories = get_all_yolo_classes()
+        categories_list = ", ".join(sorted(yolo_categories))
+        
+        prompt = f"""YOLO AI detected: {yolo_prediction} (confidence: {yolo_confidence:.2f})
 
-Look at this image carefully. What electronic device do you actually see?
+Look at this cropped image carefully. What electronic device do you actually see?
 
-Choose the EXACT category name from this price model list:
+Choose the EXACT category name from this YOLO detection list:
 {categories_list}
 
 IMPORTANT GUIDELINES:
-- For smartphones/mobile phones → use "Handphone"
-- For walkie-talkies/two-way radios → use "Telefon"
-- For regular computers → use "Laptop" or "CPU Intel"
-- For gaming consoles → use "PS2"
+- For smartphones/mobile phones → use "Phone"
+- For walkie-talkies/two-way radios → use "Walkie Talkie"
+- For desktop computers → use "PC Case" or "CPU Component"
+- For gaming controllers → use "Stick Ps"
+- If you see multiple similar devices, choose the most specific one
+- If it's not electronic waste, return "null"
 
-If the YOLO detection and mapping are correct, you can confirm by returning the mapped category.
-If it's not electronic waste, return "null".
+Context: This is part of an e-waste detection system. The image has been cropped from a larger image containing the detected object with 20% padding for context.
+"""
+
+        if prompt_context and "all_detections" in prompt_context:
+            detections_info = [
+                f"- {d['category']} (conf: {d['confidence']:.2f})"
+                for d in prompt_context["all_detections"][:5]  # Limit to first 5 for brevity
+            ]
+            prompt += f"""
+
+Other detections in the full image:
+{chr(10).join(detections_info)}
+"""
+
+        prompt += f"""
 
 JSON format only:
-{{"is_valid_ewaste": true/false, "best_category": "exact category name from list above or null", "reasoning": "brief description of what you see"}}"""
+{{"is_valid_ewaste": true/false, "best_yolo_category": "exact YOLO category name from list above or null", "reasoning": "brief description of what you see", "confidence_assessment": "high/medium/low based on image clarity"}}"""
+
+        return prompt
     
-    def _process_validation_response(
+    def _process_yolo_validation_response(
         self, 
         response_text: str, 
-        mapped_category: str, 
         yolo_prediction: str
     ) -> ValidationResult:
-        """Process and parse Gemini validation response"""
+        """
+        Process and parse Gemini YOLO validation response.
+        
+        Args:
+            response_text: Raw response from Gemini
+            yolo_prediction: Original YOLO prediction
+            
+        Returns:
+            ValidationResult with confirmed/corrected YOLO category
+        """
         try:
             # More robust response cleaning
             cleaned_text = response_text.strip()
@@ -372,13 +534,14 @@ JSON format only:
             logger.debug(f"Cleaned validation response: {cleaned_text}")
             gemini_result = json.loads(cleaned_text)
             
-            # Handle both old and new response formats for backward compatibility
-            is_valid_ewaste = gemini_result.get("is_valid_ewaste", gemini_result.get("is_category_correct", True))
-            best_category = gemini_result.get("best_category", gemini_result.get("correct_category"))
+            # Extract validation results
+            is_valid_ewaste = gemini_result.get("is_valid_ewaste", True)
+            best_yolo_category = gemini_result.get("best_yolo_category")
             reasoning = gemini_result.get("reasoning", "")
+            confidence_assessment = gemini_result.get("confidence_assessment", "medium")
             
             # Log for debugging
-            logger.info(f"Validation result - Valid: {is_valid_ewaste}, Best category: {best_category}, YOLO: {yolo_prediction}, Mapped: {mapped_category}")
+            logger.info(f"YOLO Validation - Original: {yolo_prediction}, Gemini: {best_yolo_category}, Valid: {is_valid_ewaste}")
             logger.debug(f"Gemini reasoning: {reasoning}")
             
             if not is_valid_ewaste:
@@ -388,150 +551,39 @@ JSON format only:
                     detection_source="Rejected",
                     gemini_feedback=f"Not valid e-waste: {reasoning}"
                 )
-            elif best_category and best_category != "null" and is_valid_price_category(best_category):
-                # Gemini provided a valid category - but let's be smart about it
-                if best_category == mapped_category:
-                    # Gemini confirmed the mapping is correct
+            elif best_yolo_category and best_yolo_category != "null" and best_yolo_category in get_all_yolo_classes():
+                # Gemini provided a valid YOLO category
+                if best_yolo_category == yolo_prediction:
+                    # Gemini confirmed YOLO's prediction
                     return ValidationResult(
                         is_valid=True,
-                        final_category=best_category,
+                        final_category=best_yolo_category,
                         detection_source="YOLO",
-                        gemini_feedback=f"Category confirmed: {reasoning}"
+                        gemini_feedback=f"YOLO detection confirmed ({confidence_assessment} confidence): {reasoning}"
                     )
                 else:
-                    # Gemini suggests a different category - validate this change
-                    # Special handling for known good mappings
-                    yolo_lower = yolo_prediction.lower()
-                    best_lower = best_category.lower()
-                    mapped_lower = mapped_category.lower()
-                    
-                    # Don't override well-established mappings unless there's strong reason
-                    questionable_overrides = [
-                        (yolo_lower == "phone" and best_lower == "telefon" and mapped_lower == "handphone"),
-                        (yolo_lower == "laptop" and best_category != "Laptop"),
-                        (yolo_lower == "monitor" and best_category != "Monitor"),
-                        (yolo_lower == "keyboard" and best_category != "Keyboard"),
-                        (yolo_lower == "mouse" and best_category != "Mouse"),
-                    ]
-                    
-                    if any(questionable_overrides):
-                        logger.warning(f"Gemini suggested questionable override: {yolo_prediction} -> {best_category}, keeping mapped: {mapped_category}")
-                        return ValidationResult(
-                            is_valid=True,
-                            final_category=mapped_category,
-                            detection_source="YOLO",
-                            gemini_feedback=f"Kept original mapping {mapped_category} over Gemini suggestion {best_category}: {reasoning}"
-                        )
-                    else:
-                        # Accept Gemini's suggestion for other cases
-                        logger.info(f"Gemini correction: {yolo_prediction} -> {best_category} (was mapped to {mapped_category})")
-                        return ValidationResult(
-                            is_valid=True,
-                            final_category=best_category,
-                            detection_source="Gemini Interfered",
-                            gemini_feedback=f"Corrected from {yolo_prediction} to {best_category}: {reasoning}"
-                        )
+                    # Gemini corrected YOLO's prediction to a different YOLO category
+                    logger.info(f"Gemini corrected YOLO: {yolo_prediction} → {best_yolo_category}")
+                    return ValidationResult(
+                        is_valid=True,
+                        final_category=best_yolo_category,
+                        detection_source="Gemini Corrected",
+                        gemini_feedback=f"Corrected from {yolo_prediction} to {best_yolo_category} ({confidence_assessment} confidence): {reasoning}"
+                    )
             else:
-                # No valid category provided or category not in our list - use mapped category
-                # But first check if we can extract useful information from the reasoning
-                if best_category == "null" or best_category is None:
-                    logger.warning(f"Gemini couldn't identify a valid category. Reasoning: '{reasoning}'")
-                    
-                    # For well-known good mappings, don't try reasoning extraction - just use the mapping
-                    yolo_lower = yolo_prediction.lower()
-                    well_known_mappings = [
-                        yolo_lower == "phone",
-                        yolo_lower == "laptop", 
-                        yolo_lower == "monitor",
-                        yolo_lower == "keyboard",
-                        yolo_lower == "mouse",
-                        yolo_lower == "printer",
-                        yolo_lower == "speaker",
-                        yolo_lower == "battery",
-                        yolo_lower == "charger"
-                    ]
-                    
-                    if any(well_known_mappings):
-                        logger.info(f"Using mapped category for well-known device: {yolo_prediction} -> {mapped_category}")
-                        return ValidationResult(
-                            is_valid=True,
-                            final_category=mapped_category,
-                            detection_source="YOLO",
-                            gemini_feedback=f"Used mapped category for well-known device. Gemini reasoning: {reasoning}"
-                        )
-                    
-                    # Try to extract category hints from the reasoning text only for unknown devices
-                    reasoning_lower = reasoning.lower() if reasoning else ""
-                    potential_categories = []
-                    
-                    # Check for common device mentions in reasoning
-                    device_hints = {
-                        "washing machine": "Mesin Cuci",
-                        "mesin cuci": "Mesin Cuci", 
-                        "washer": "Mesin Cuci",
-                        "television": "TV",
-                        "tv": "TV",
-                        "monitor": "Monitor",
-                        "laptop": "Laptop",
-                        "computer": "CPU Intel",
-                        "smartphone": "Handphone",
-                        "phone": "Handphone",
-                        "mobile": "Handphone",
-                        "ponsel": "Handphone",
-                        "handphone": "Handphone",
-                        "printer": "Printer",
-                        "scanner": "Printer",
-                        "speaker": "Speaker",
-                        "radio": "Speaker",
-                        "microwave": "Microwave",
-                        "refrigerator": "Komponen Kulkas",
-                        "fridge": "Komponen Kulkas",
-                        "kulkas": "Komponen Kulkas",
-                        "keyboard": "Keyboard",
-                        "mouse": "Mouse",
-                        "battery": "Baterai Laptop",
-                        "baterai": "Baterai Laptop",
-                        "charger": "Adaptor /Kilo",
-                        "adaptor": "Adaptor /Kilo",
-                        "cables": "Adaptor /Kilo",
-                        "kabel": "Adaptor /Kilo",
-                        "iron": "Seterika",
-                        "setrika": "Seterika",
-                        "fan": "Kipas",
-                        "kipas": "Kipas",
-                        "lamp": "Lampu",
-                        "lampu": "Lampu",
-                        "router": "Router",
-                        "walkie talkie": "Telefon",
-                        "two way radio": "Telefon",
-                        "hard disk": "Hardisk",
-                        "harddisk": "Hardisk",
-                        "storage": "Hardisk"
-                    }
-                    
-                    for hint, category in device_hints.items():
-                        if hint in reasoning_lower and is_valid_price_category(category):
-                            potential_categories.append(category)
-                    
-                    # If we found a potential category in the reasoning, use it
-                    if potential_categories:
-                        corrected_category = potential_categories[0]  # Use first match
-                        logger.info(f"Extracted category from reasoning: {yolo_prediction} -> {corrected_category}")
-                        return ValidationResult(
-                            is_valid=True,
-                            final_category=corrected_category,
-                            detection_source="Reasoning Extract",
-                            gemini_feedback=f"Category extracted from reasoning: {reasoning}"
-                        )
+                # No valid category provided or category not in YOLO list
+                if best_yolo_category == "null" or best_yolo_category is None:
+                    logger.warning(f"Gemini couldn't identify a valid YOLO category. Reasoning: '{reasoning}'")
                 else:
-                    logger.warning(f"Gemini provided invalid category '{best_category}' (not in price list)")
+                    logger.warning(f"Gemini provided invalid YOLO category '{best_yolo_category}' (not in YOLO class list)")
                 
-                logger.warning(f"Using mapped category '{mapped_category}' as fallback")
+                # Use original YOLO prediction as fallback
+                logger.info(f"Using original YOLO prediction '{yolo_prediction}' as fallback")
                 return ValidationResult(
                     is_valid=True,
-                    final_category=mapped_category,
+                    final_category=yolo_prediction,
                     detection_source="YOLO",
-                    gemini_feedback=f"Valid e-waste, using mapped category. Gemini reasoning: {reasoning}"
+                    gemini_feedback=f"Used original YOLO prediction as fallback. Gemini reasoning: {reasoning}"
                 )
                 
         except (json.JSONDecodeError, ValueError) as e:
@@ -539,7 +591,7 @@ JSON format only:
             logger.warning(f"JSON parse error: {str(e)}")
             return ValidationResult(
                 is_valid=True,
-                final_category=mapped_category,
+                final_category=yolo_prediction,
                 detection_source="YOLO",
                 gemini_feedback="Gemini response parsing failed - using YOLO prediction"
             )
@@ -580,27 +632,38 @@ JSON format only:
         image_path: str, 
         category: str, 
         yolo_prediction: str = None,
-        mapped_category: str = None,
+        yolo_confidence: float = None,
         extra_image_path: str = None,
         prompt_context: dict = None
     ) -> Dict[str, Any]:
         """
         Process all Gemini operations in parallel for maximum speed:
-        - Validation, Description, Suggestions, and Damage Analysis
+        - YOLO Validation, Description, Suggestions, and Damage Analysis
+        
+        Args:
+            image_path: Path to cropped detection image
+            category: Display category for content generation
+            yolo_prediction: Original YOLO prediction for validation
+            yolo_confidence: YOLO confidence score
+            extra_image_path: Optional additional image
+            prompt_context: Optional context information
+            
+        Returns:
+            Dictionary with all analysis results
         """
         if not self.is_available or self.model is None:
             return {
                 "validation": ValidationResult(
                     is_valid=True,
-                    final_category=mapped_category or category,
+                    final_category=yolo_prediction or category,
                     detection_source="YOLO",
                     gemini_feedback="Gemini not available"
                 ),
-                "description": f"Perangkat elektronik {category.lower()}",
+                "description": f"Perangkat elektronik {category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis",
                 "suggestions": [
-                    "Periksa panduan manufacturer",
-                    "Pisahkan komponen berbahaya", 
-                    "Bawa ke pusat daur ulang e-waste"
+                    "Periksa panduan dari manufacturer resmi",        # 6 words
+                    "Pisahkan komponen berbahaya dengan hati hati",  # 7 words
+                    "Bawa ke pusat daur ulang terdekat"              # 7 words
                 ],
                 "damage_level": None,
                 "damage_analysis": "Damage analysis unavailable"
@@ -610,10 +673,10 @@ JSON format only:
             # Create all tasks concurrently
             tasks = []
             
-            # Validation task
-            if yolo_prediction and mapped_category:
-                tasks.append(("validation", self.validate_detection(
-                    image_path, yolo_prediction, mapped_category, 
+            # YOLO Validation task (if we have YOLO prediction info)
+            if yolo_prediction and yolo_confidence is not None:
+                tasks.append(("validation", self.validate_yolo_detection(
+                    image_path, yolo_prediction, yolo_confidence, 
                     extra_image_path, prompt_context
                 )))
             
@@ -641,17 +704,17 @@ JSON format only:
                     if task_name == "validation":
                         batch_result["validation"] = ValidationResult(
                             is_valid=True,
-                            final_category=mapped_category or category,
+                            final_category=yolo_prediction or category,
                             detection_source="YOLO",
                             gemini_feedback=f"Validation failed: {str(result)}"
                         )
                     elif task_name == "description":
-                        batch_result["description"] = f"{category} elektronik terdeteksi"
+                        batch_result["description"] = f"Perangkat elektronik {category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis"
                     elif task_name == "suggestions":
                         batch_result["suggestions"] = [
-                            "Periksa panduan manufacturer",
-                            "Pisahkan komponen berbahaya",
-                            "Bawa ke pusat daur ulang e-waste"
+                            "Periksa panduan dari manufacturer resmi",        # 6 words
+                            "Pisahkan komponen berbahaya dengan hati hati",  # 7 words
+                            "Bawa ke pusat daur ulang terdekat"              # 7 words
                         ]
                     elif task_name == "damage":
                         batch_result["damage_level"] = 5  # Default middle value
@@ -666,9 +729,9 @@ JSON format only:
                     elif task_name == "suggestions":
                         # Ensure we have valid suggestions
                         suggs = result if result and len(result) == 3 else [
-                            "Periksa panduan manufacturer",
-                            "Pisahkan komponen berbahaya",
-                            "Bawa ke pusat daur ulang e-waste"
+                            "Periksa panduan dari manufacturer resmi",        # 6 words
+                            "Pisahkan komponen berbahaya dengan hati hati",  # 7 words
+                            "Bawa ke pusat daur ulang terdekat"              # 7 words
                         ]
                         batch_result["suggestions"] = suggs
                     elif task_name == "damage":
@@ -686,49 +749,57 @@ JSON format only:
             return {
                 "validation": ValidationResult(
                     is_valid=True,
-                    final_category=mapped_category or category,
+                    final_category=yolo_prediction or category,
                     detection_source="YOLO",
                     gemini_feedback=f"Batch analysis error: {str(e)}"
                 ),
-                "description": f"Perangkat elektronik {category.lower()}",
+                "description": f"Perangkat elektronik {category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis",
                 "suggestions": [
-                    "Periksa panduan manufacturer",
-                    "Pisahkan komponen berbahaya",
-                    "Bawa ke pusat daur ulang e-waste"
+                    "Periksa panduan dari manufacturer resmi",        # 6 words
+                    "Pisahkan komponen berbahaya dengan hati hati",  # 7 words
+                    "Bawa ke pusat daur ulang terdekat"              # 7 words
                 ],
                 "damage_level": None,
                 "damage_analysis": f"Batch analysis error: {str(e)}"
             }
 
-    async def cross_validate_category(self, description: str, yolo_category: str, mapped_category: str) -> str:
+    async def cross_validate_category(self, description: str, yolo_category: str, validated_category: str) -> str:
         """
-        Cross-validate category using the generated description to catch obvious mismatches
+        Cross-validate category using the generated description to catch obvious mismatches.
+        
+        Args:
+            description: Generated description of the device
+            yolo_category: Original YOLO category
+            validated_category: Gemini-validated YOLO category
+            
+        Returns:
+            Final validated YOLO category
         """
         if not description or len(description) < 5:
-            return mapped_category
+            return validated_category
         
         # Simple keyword matching for common mismatches
         description_lower = description.lower()
         
-        # Common mismatch patterns
+        # Common mismatch patterns for YOLO categories
         category_keywords = {
-            "Mesin Cuci": ["cuci", "washing", "mesin cuci"],
-            "TV": ["tv", "televisi", "television", "layar besar"],
+            "Washing Machine": ["cuci", "washing", "mesin cuci"],
+            "Television": ["tv", "televisi", "television", "layar besar"],
             "Laptop": ["laptop", "notebook", "komputer"],
-            "Handphone": ["hp", "handphone", "phone", "smartphone"],
+            "Phone": ["hp", "handphone", "phone", "smartphone"],
             "Printer": ["printer", "cetak", "print"],
             "Monitor": ["monitor", "layar komputer"],
             "Speaker": ["speaker", "audio", "suara"],
             "Microwave": ["microwave", "oven", "panggang"],
-            "AC": ["ac", "air conditioner", "pendingin"],
-            "Kipas": ["kipas", "fan", "angin"]
+            "Fan": ["kipas", "fan", "angin"],
+            "Walkie Talkie": ["walkie", "radio", "komunikasi"]
         }
         
-        # Check if description suggests a different category
+        # Check if description suggests a different YOLO category
         for category, keywords in category_keywords.items():
             if any(keyword in description_lower for keyword in keywords):
-                if category != yolo_category and category in PRICE_CATEGORIES:
-                    logger.info(f"Cross-validation suggests category change: {yolo_category} -> {category} based on description: '{description}'")
+                if category != validated_category and category in get_all_yolo_classes():
+                    logger.info(f"Cross-validation suggests YOLO category change: {validated_category} → {category} based on description: '{description}'")
                     return category
         
-        return mapped_category
+        return validated_category

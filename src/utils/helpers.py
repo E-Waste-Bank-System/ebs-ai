@@ -1,5 +1,7 @@
 """
 Helper functions for E-waste detection system
+
+Pipeline: YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
 """
 
 import uuid
@@ -89,14 +91,14 @@ def create_fallback_prediction(
     Create a standardized fallback prediction object
     
     Args:
-        category: Detection category
+        category: Detection category (YOLO category)
         confidence: Detection confidence
         bbox: Bounding box coordinates
         price: Optional price value
         detection_source: Source identifier
         
     Returns:
-        Dictionary with fallback prediction data
+        FullPrediction object with fallback data
     """
     from src.models.response_models import FullPrediction
     
@@ -107,12 +109,12 @@ def create_fallback_prediction(
         category=category,
         confidence=confidence,
         regression_result=price,
-        description=f"Perangkat elektronik {category.lower()}",
+        description=f"Perangkat elektronik {category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis",  # 10-15 words
         bbox=bbox,
         suggestion=[
-            "Periksa panduan manufacturer",
-            "Pisahkan komponen berbahaya",
-            "Bawa ke pusat daur ulang e-waste"
+            "Periksa panduan dari manufacturer resmi",        # 6 words
+            "Pisahkan komponen berbahaya dengan hati hati",  # 7 words
+            "Bawa ke pusat daur ulang terdekat"              # 7 words
         ],
         risk_lvl=risk_level,
         damage_level=None,
@@ -122,11 +124,18 @@ def create_fallback_prediction(
 
 def calculate_risk_level(category: str, confidence: float) -> int:
     """
-    Calculate risk level 1-10 based on YOLO category and confidence
+    Calculate environmental/health risk level 1-10 based on YOLO category and confidence
     Higher risk = more dangerous to environment/health
+    
+    Args:
+        category: YOLO category name (37 classes)
+        confidence: YOLO detection confidence (0-1)
+        
+    Returns:
+        Risk level 1-10 (1=minimal, 10=severe)
     """
-    # Risk levels based on YOLO class names (1-5 base scale)
-    # Categories with high environmental/health risks
+    # Risk levels based on YOLO category names (1-5 base scale)
+    # Categories with high environmental/health risks (large appliances, complex electronics)
     high_risk_categories = {
         "Television", "Fridge", "Microwave", "Washing Machine", 
         "Rice Cooker", "Iron"
@@ -155,7 +164,7 @@ def calculate_risk_level(category: str, confidence: float) -> int:
         "Fan", "Lamp", "Flashlight"
     }
     
-    # Determine base risk level
+    # Determine base risk level based on YOLO category
     if category in high_risk_categories:
         base_risk = 5
     elif category in medium_high_risk_categories:
@@ -167,7 +176,8 @@ def calculate_risk_level(category: str, confidence: float) -> int:
     elif category in minimal_risk_categories:
         base_risk = 1
     else:
-        # Unknown category - assign medium risk
+        # Unknown YOLO category - assign medium risk
+        logger.warning(f"Unknown YOLO category for risk calculation: {category}")
         base_risk = 3
     
     # Adjust based on confidence level
@@ -178,7 +188,7 @@ def calculate_risk_level(category: str, confidence: float) -> int:
         # Very high confidence slightly reduces risk
         base_risk = max(1, base_risk - 1)
     
-    # Scale to 1-10 range
+    # Scale to 1-10 range (multiply by 2)
     scaled_risk = base_risk * 2
     return min(10, max(1, scaled_risk))
 

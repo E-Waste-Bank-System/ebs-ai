@@ -1,6 +1,12 @@
 """
 Detection Service Module
-Handles e-waste detection using YOLO and Gemini
+Handles e-waste detection pipeline: YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
+
+Flow:
+1. YOLO detects objects in 37 YOLO categories
+2. Gemini validates/corrects YOLO predictions (works with YOLO categories)
+3. Validated YOLO categories are mapped to 33 price categories
+4. Price prediction uses final price categories
 """
 
 import logging
@@ -33,7 +39,11 @@ logger = logging.getLogger(__name__)
 
 
 class DetectionService:
-    """Main detection service orchestrating all components"""
+    """
+    Main detection service orchestrating the complete e-waste detection pipeline
+    
+    Pipeline: YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
+    """
     
     def __init__(self):
         # Initialize all components
@@ -45,7 +55,7 @@ class DetectionService:
         self.yolo_loaded = self.yolo_detector.load_model()
         self.price_loaded = self.price_predictor.load_models()
         
-        logger.info(f"Detection service initialized - YOLO: {self.yolo_loaded}, Price: {self.price_loaded}")
+        logger.info(f"Detection service initialized - YOLO: {self.yolo_loaded}, Price: {self.price_loaded}, Gemini: {self.gemini_service.is_service_available()}")
     
     def _calculate_iou(self, box1: List[float], box2: List[float]) -> float:
         """
@@ -137,22 +147,56 @@ class DetectionService:
         
         return description
     
-
     def _save_cropped_bbox(self, image_path: str, bbox: List[float], label: str) -> str:
         """
-        Crop the image to the bounding box and save to a temp file. Returns the file path.
+        Crop the image to the bounding box with 20% padding for context and save to a temp file.
+        
+        Args:
+            image_path: Path to source image
+            bbox: Bounding box coordinates [x1, y1, x2, y2]
+            label: Label for the crop (used in filename)
+            
+        Returns:
+            Path to the cropped image file
         """
         image = Image.open(image_path).convert("RGB")
-        # Ensure bbox is int
-        bbox_int = [int(x) for x in bbox]
+        img_width, img_height = image.size
+        
+        # Extract bbox coordinates
+        x1, y1, x2, y2 = bbox
+        
+        # Add 20% padding for context
+        width = x2 - x1
+        height = y2 - y1
+        padding_x = width * 0.2
+        padding_y = height * 0.2
+        
+        # Calculate padded coordinates, ensuring they stay within image bounds
+        padded_x1 = max(0, x1 - padding_x)
+        padded_y1 = max(0, y1 - padding_y)
+        padded_x2 = min(img_width, x2 + padding_x)
+        padded_y2 = min(img_height, y2 + padding_y)
+        
+        # Ensure bbox is int for cropping
+        bbox_int = [int(padded_x1), int(padded_y1), int(padded_x2), int(padded_y2)]
         cropped = image.crop(bbox_int)
+        
         temp_cropped = tempfile.NamedTemporaryFile(suffix=f'_{label}.jpg', delete=False)
         cropped.save(temp_cropped.name)
-        logger.info(f"Cropped image for '{label}' saved: {temp_cropped.name}")
+        logger.info(f"Cropped image for '{label}' with 20% padding saved: {temp_cropped.name} (size: {cropped.size})")
         return temp_cropped.name
 
-    def _is_valid_crop(self, crop_path: str, min_size: int = 32) -> bool:
-        """Check if the cropped image is large enough for Gemini."""
+    def _is_valid_crop(self, crop_path: str, min_size: int = 50) -> bool:
+        """
+        Check if the cropped image is large enough for Gemini analysis.
+        
+        Args:
+            crop_path: Path to cropped image
+            min_size: Minimum width/height in pixels (default 50x50)
+            
+        Returns:
+            True if crop is valid for analysis
+        """
         return safe_execute(
             lambda: self._check_image_size(crop_path, min_size),
             False,
@@ -172,8 +216,15 @@ class DetectionService:
         confidence_threshold: float = LOW_CONFIDENCE_THRESHOLD
     ) -> FullResponse:
         """
-        Process image with complete pipeline including validation and pricing
+        Process image with complete pipeline: YOLO → Gemini Validation → Mapping → Pricing
         OPTIMIZED for speed with parallel processing
+        
+        Args:
+            image_bytes: Input image as bytes
+            confidence_threshold: Minimum confidence for YOLO detections
+            
+        Returns:
+            FullResponse with complete predictions
         """
         if not YOLO_AVAILABLE:
             logger.error("YOLO not available")
@@ -187,7 +238,7 @@ class DetectionService:
         annotated_path = "ebs-ai/tmp/annotated_yolo.jpg"
         cropped_paths = []
         try:
-            # Run YOLO detection with timing and save annotated image using Ultralytics
+            # Step 1: YOLO Detection with timing and save annotated image
             yolo_start = time.time()
             detections = self.yolo_detector.detect_objects(tmp_path, save_annotated_path=annotated_path)
             yolo_time = time.time() - yolo_start
@@ -199,21 +250,21 @@ class DetectionService:
             
             # Filter overlapping detections
             filtered_detections = self._filter_overlapping_detections(detections)
-            logger.info(f"Processing {len(filtered_detections)} detections after filtering")
+            logger.info(f"Processing {len(filtered_detections)} detections after filtering (removed {len(detections) - len(filtered_detections)} overlaps)")
             
-            # Process all detections in parallel for maximum speed
+            # Step 2-4: Process all detections in parallel through the complete pipeline
             prediction_tasks = []
             for det in filtered_detections:
-                task = self._process_single_detection_optimized(
+                task = self._process_single_detection_complete_pipeline(
                     det, tmp_path, filtered_detections
                 )
                 prediction_tasks.append(task)
             
             # Execute all detection processing in parallel
-            gemini_start = time.time()
+            pipeline_start = time.time()
             predictions = await asyncio.gather(*prediction_tasks, return_exceptions=True)
-            gemini_time = time.time() - gemini_start
-            logger.info(f"All Gemini processing completed in {gemini_time:.2f} seconds")
+            pipeline_time = time.time() - pipeline_start
+            logger.info(f"Complete pipeline processing completed in {pipeline_time:.2f} seconds")
             
             # Filter out any failed predictions and log errors
             valid_predictions = []
@@ -236,34 +287,43 @@ class DetectionService:
                 if cp and os.path.exists(cp):
                     os.remove(cp)
     
-    async def _process_single_detection_optimized(
+    async def _process_single_detection_complete_pipeline(
         self, 
         det: Detection, 
         image_path: str, 
         all_detections: List[Detection]
     ) -> FullPrediction:
-        """Process a single detection with optimized parallel Gemini calls"""
-        # Keep original category for display
-        display_category = det.category
+        """
+        Process a single detection through the complete pipeline:
+        YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
         
-        # Get mapped category for price prediction
-        price_category = get_mapped_category(det.category)
-        logger.info(f"Processing '{display_category}' -> '{price_category}'")
-        
-        # For critical mappings, add extra protection
-        if display_category.lower() == "phone" and price_category != "Handphone":
-            logger.error(f"CRITICAL: Phone mapping error detected! Expected 'Handphone', got '{price_category}'")
-            price_category = "Handphone"  # Force correct mapping
+        Args:
+            det: YOLO Detection object
+            image_path: Path to source image
+            all_detections: List of all detections for context
             
-        # Crop the detection
-        cropped_path = self._save_cropped_bbox(image_path, det.bbox, det.category)
+        Returns:
+            FullPrediction with complete analysis
+        """
+        # Step 1: YOLO Detection (already done - we have det)
+        yolo_category = det.category
+        yolo_confidence = det.confidence
+        logger.info(f"Processing YOLO detection: '{yolo_category}' (confidence: {yolo_confidence:.3f})")
+        
+        # Crop the detection for Gemini analysis
+        cropped_path = self._save_cropped_bbox(image_path, det.bbox, yolo_category)
         
         try:
             # Check crop validity
             if not self._is_valid_crop(cropped_path):
-                logger.warning(f"Small crop for {display_category}, using fallback processing")
+                logger.warning(f"Small crop for {yolo_category}, using fallback processing")
                 
-                # For small crops, do minimal processing
+                # For small crops, skip Gemini and go straight to mapping and pricing
+                validated_yolo_category = yolo_category
+                detection_source = "YOLO (small crop)"
+                
+                # Map to price category and predict price
+                price_category = get_mapped_category(validated_yolo_category)
                 price = safe_execute(
                     self.price_predictor.predict_price,
                     None,
@@ -272,7 +332,7 @@ class DetectionService:
                 )
                 
                 return create_fallback_prediction(
-                    display_category, det.confidence, det.bbox, price, "YOLO (small crop)"
+                    yolo_category, yolo_confidence, det.bbox, price, detection_source
                 )
             
             # Prepare context for Gemini
@@ -282,25 +342,25 @@ class DetectionService:
                     for d in all_detections
                 ],
                 "focus_bbox": det.bbox,
-                "focus_label": display_category
+                "focus_label": yolo_category
             }
             
-            # Use batch processing for all Gemini operations
+            # Step 2: Gemini Validation (validates YOLO categories)
             batch_result = await safe_execute(
                 self.gemini_service.process_batch_analysis,
-                self._get_default_batch_result(display_category, price_category),
-                f"Gemini batch analysis failed for {display_category}",
+                self._get_default_batch_result(yolo_category),
+                f"Gemini batch analysis failed for {yolo_category}",
                 cropped_path,
-                display_category,
-                yolo_prediction=det.category,
-                mapped_category=price_category,
+                yolo_category,  # For content generation
+                yolo_prediction=yolo_category,  # For validation
+                yolo_confidence=yolo_confidence,
                 extra_image_path=None,
                 prompt_context=prompt_context
             )
             
             # Extract results from batch processing
             validation = batch_result.get("validation")
-            description = batch_result.get("description", f"Perangkat elektronik {display_category.lower()}")
+            description = batch_result.get("description", f"Perangkat elektronik {yolo_category.lower()}")
             suggestions = batch_result.get("suggestions", [
                 "Periksa panduan manufacturer",
                 "Pisahkan komponen berbahaya", 
@@ -308,46 +368,33 @@ class DetectionService:
             ])
             damage_level = batch_result.get("damage_level")
             
-            # Determine final categories based on validation
-            final_display_category, final_price_category, detection_source = self._determine_final_categories(
-                validation, display_category, price_category, description
+            # Step 3: Determine validated YOLO category
+            validated_yolo_category, detection_source = self._determine_validated_yolo_category(
+                validation, yolo_category, description
             )
             
-            # CRITICAL SAFEGUARD: For Phone detections, ensure we don't end up with wrong categories
-            if display_category.lower() == "phone":
-                if final_price_category not in ["Handphone", "Telefon"]:
-                    logger.error(f"CRITICAL: Phone validation resulted in wrong category '{final_price_category}', forcing to 'Handphone'")
-                    final_price_category = "Handphone"
-                    final_display_category = "Phone"
-                    detection_source = "YOLO (corrected)"
-                    
-                # If it's Telefon but original was Phone, validate this is correct
-                if final_price_category == "Telefon":
-                    logger.warning(f"Phone -> Telefon conversion detected. Checking if this is a walkie-talkie...")
-                    # For now, prefer Handphone for Phone detections unless there's strong evidence
-                    if "walkie" not in description.lower() and "radio" not in description.lower():
-                        logger.info("No walkie-talkie evidence found, keeping as Handphone")
-                        final_price_category = "Handphone"
-                        final_display_category = "Phone"
-                        detection_source = "YOLO (corrected)"
+            # Step 4: YOLO-to-Price Mapping (after Gemini validation)
+            price_category = get_mapped_category(validated_yolo_category)
+            logger.info(f"YOLO→Price mapping: '{validated_yolo_category}' → '{price_category}'")
             
-            # Price prediction and risk calculation
+            # Step 5: Price Prediction
             price = safe_execute(
                 self.price_predictor.predict_price,
                 None,
-                f"Price prediction failed for {final_price_category}",
-                final_price_category
+                f"Price prediction failed for {price_category}",
+                price_category
             )
             
-            # Log the final result for debugging
-            logger.info(f"Final prediction: {display_category} -> {final_display_category}, price_category: {final_price_category}, price: {price}, source: {detection_source}")
+            # Calculate risk level based on final categories
+            risk_level = calculate_risk_level(validated_yolo_category, yolo_confidence)
             
-            risk_level = calculate_risk_level(final_price_category, det.confidence)
+            # Log the complete pipeline result
+            logger.info(f"Complete pipeline: {yolo_category} → {validated_yolo_category} → {price_category}, price: {price}, source: {detection_source}")
             
             return FullPrediction(
                 id=generate_unique_id(),
-                category=final_display_category,
-                confidence=det.confidence,
+                category=validated_yolo_category,  # Display the validated YOLO category
+                confidence=yolo_confidence,
                 regression_result=price,
                 description=description,
                 bbox=det.bbox,
@@ -358,8 +405,9 @@ class DetectionService:
             )
             
         except Exception as e:
-            logger.error(f"Error processing detection {display_category}: {str(e)}")
+            logger.error(f"Error processing detection {yolo_category}: {str(e)}")
             # Return basic prediction on error
+            price_category = get_mapped_category(yolo_category)
             price = safe_execute(
                 self.price_predictor.predict_price,
                 None,
@@ -368,48 +416,55 @@ class DetectionService:
             )
             
             return create_fallback_prediction(
-                display_category, det.confidence, det.bbox, price, "YOLO (error fallback)"
+                yolo_category, yolo_confidence, det.bbox, price, "YOLO (error fallback)"
             )
         finally:
             # Cleanup cropped image
             if cropped_path and os.path.exists(cropped_path):
                 os.remove(cropped_path)
     
-    def _get_default_batch_result(self, display_category: str, price_category: str) -> Dict[str, Any]:
+    def _get_default_batch_result(self, yolo_category: str) -> Dict[str, Any]:
         """Get default batch result for fallback scenarios"""
         return {
             "validation": ValidationResult(
                 is_valid=True,
-                final_category=price_category,
+                final_category=yolo_category,
                 detection_source="YOLO",
                 gemini_feedback="Batch processing fallback"
             ),
-            "description": f"Perangkat elektronik {display_category.lower()}",
+            "description": f"Perangkat elektronik {yolo_category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis",  # 10-15 words
             "suggestions": [
-                "Periksa panduan manufacturer",
-                "Pisahkan komponen berbahaya",
-                "Bawa ke pusat daur ulang e-waste"
+                "Periksa panduan dari manufacturer resmi",        # 6 words
+                "Pisahkan komponen berbahaya dengan hati hati",  # 7 words
+                "Bawa ke pusat daur ulang terdekat"              # 7 words
             ],
             "damage_level": None
         }
     
-    def _determine_final_categories(
+    def _determine_validated_yolo_category(
         self, 
         validation: Optional[ValidationResult], 
-        display_category: str, 
-        price_category: str, 
+        original_yolo_category: str, 
         description: str
-    ) -> Tuple[str, str, str]:
-        """Determine final categories and detection source based on validation results"""
-        final_display_category = display_category
-        final_price_category = price_category
+    ) -> Tuple[str, str]:
+        """
+        Determine the final validated YOLO category and detection source.
+        
+        Args:
+            validation: Gemini validation result
+            original_yolo_category: Original YOLO prediction
+            description: Generated description for cross-validation
+            
+        Returns:
+            Tuple of (validated_yolo_category, detection_source)
+        """
+        validated_yolo_category = original_yolo_category
         detection_source = "YOLO"
         
         if validation and validation.is_valid:
-            if validation.final_category and validation.final_category != price_category:
-                final_price_category = validation.final_category
-                final_display_category = validation.final_category
-                logger.info(f"Gemini corrected: '{display_category}' -> '{final_display_category}'")
+            if validation.final_category and validation.final_category != original_yolo_category:
+                validated_yolo_category = validation.final_category
+                logger.info(f"Gemini corrected YOLO: '{original_yolo_category}' → '{validated_yolo_category}'")
             detection_source = validation.detection_source
         elif validation and not validation.is_valid:
             logger.warning(f"Gemini rejected detection: {validation.gemini_feedback}")
@@ -419,28 +474,27 @@ class DetectionService:
             if GEMINI_ENABLE_CROSS_VALIDATION:
                 cross_validated_category = safe_execute(
                     self.gemini_service.cross_validate_category,
-                    price_category,
-                    f"Cross-validation failed for {display_category}",
-                    description, display_category, price_category
+                    validated_yolo_category,
+                    f"Cross-validation failed for {original_yolo_category}",
+                    description, original_yolo_category, validated_yolo_category
                 )
-                if cross_validated_category != price_category:
-                    final_price_category = cross_validated_category
-                    final_display_category = cross_validated_category
+                if cross_validated_category != validated_yolo_category:
+                    validated_yolo_category = cross_validated_category
                     detection_source = "Cross-validated"
-                    logger.info(f"Cross-validation corrected: '{display_category}' -> '{final_display_category}'")
+                    logger.info(f"Cross-validation corrected: '{original_yolo_category}' → '{validated_yolo_category}'")
         
-        return final_display_category, final_price_category, detection_source
+        return validated_yolo_category, detection_source
     
     @log_execution_time("YOLO detection only")
     async def detect_objects_only(self, image_bytes: bytes) -> ObjectResponse:
         """
-        YOLO detection only
+        YOLO detection only - no validation or pricing
         
         Args:
             image_bytes: Image file bytes
             
         Returns:
-            ObjectResponse with detected objects
+            ObjectResponse with detected objects in YOLO categories
         """
         if not self.yolo_loaded:
             return ObjectResponse(detections=[])
@@ -470,10 +524,10 @@ class DetectionService:
     
     def predict_price_only(self, category: str) -> Optional[PriceResponse]:
         """
-        Price prediction only
+        Price prediction only - expects price model categories
         
         Args:
-            category: Category name
+            category: Price model category name (33 categories)
             
         Returns:
             PriceResponse or None if failed
@@ -490,7 +544,7 @@ class DetectionService:
         return None
     
     def get_supported_categories(self) -> List[str]:
-        """Get list of supported price categories"""
+        """Get list of supported price categories (33 categories)"""
         if self.price_loaded:
             return self.price_predictor.get_supported_categories()
         return []
@@ -499,7 +553,9 @@ class DetectionService:
         """Get system component status"""
         return {
             "yolo_available": self.yolo_loaded,
+            "yolo_categories_count": 37,
             "price_prediction_available": self.price_loaded,
+            "price_categories_count": len(self.get_supported_categories()) if self.price_loaded else 0,
             "gemini_available": self.gemini_service.is_service_available(),
-            "supported_categories_count": len(self.get_supported_categories()) if self.price_loaded else 0
+            "pipeline_flow": "YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction"
         }
