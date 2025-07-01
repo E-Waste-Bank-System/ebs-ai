@@ -266,14 +266,22 @@ class DetectionService:
             pipeline_time = time.time() - pipeline_start
             logger.info(f"Complete pipeline processing completed in {pipeline_time:.2f} seconds")
             
-            # Filter out any failed predictions and log errors
+            # Filter out failed predictions, rejections, and log results
             valid_predictions = []
+            rejected_count = 0
+            error_count = 0
+            
             for i, pred in enumerate(predictions):
                 if isinstance(pred, Exception):
                     logger.error(f"Detection {i} failed: {pred}")
+                    error_count += 1
+                elif pred is None:
+                    # Detection was rejected by Gemini
+                    rejected_count += 1
                 else:
                     valid_predictions.append(pred)
             
+            logger.info(f"Pipeline results: {len(valid_predictions)} valid, {rejected_count} rejected, {error_count} errors")
             return FullResponse(predictions=valid_predictions)
             
         except Exception as e:
@@ -292,7 +300,7 @@ class DetectionService:
         det: Detection, 
         image_path: str, 
         all_detections: List[Detection]
-    ) -> FullPrediction:
+    ) -> Optional[FullPrediction]:
         """
         Process a single detection through the complete pipeline:
         YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
@@ -303,7 +311,7 @@ class DetectionService:
             all_detections: List of all detections for context
             
         Returns:
-            FullPrediction with complete analysis
+            FullPrediction with complete analysis, or None if detection is rejected
         """
         # Step 1: YOLO Detection (already done - we have det)
         yolo_category = det.category
@@ -372,6 +380,11 @@ class DetectionService:
             validated_yolo_category, detection_source = self._determine_validated_yolo_category(
                 validation, yolo_category, description
             )
+            
+            # Check if detection was rejected - if so, return None to exclude from results
+            if detection_source == "Rejected":
+                logger.info(f"Detection rejected by Gemini: {yolo_category} - excluding from results")
+                return None
             
             # Step 4: YOLO-to-Price Mapping (after Gemini validation)
             price_category = get_mapped_category(validated_yolo_category)
@@ -557,5 +570,7 @@ class DetectionService:
             "price_prediction_available": self.price_loaded,
             "price_categories_count": len(self.get_supported_categories()) if self.price_loaded else 0,
             "gemini_available": self.gemini_service.is_service_available(),
-            "pipeline_flow": "YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction"
+            "pipeline_flow": "YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction",
+            "rejection_handling": "Rejected detections are excluded from results",
+            "validation_types": ["YOLO", "Gemini Corrected", "Cross-validated", "Rejected"]
         }
