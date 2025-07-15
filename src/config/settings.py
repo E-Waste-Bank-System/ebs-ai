@@ -56,7 +56,7 @@ GEMINI_MAX_CONCURRENT_REQUESTS = int(os.environ.get('GEMINI_MAX_CONCURRENT_REQUE
 GEMINI_BATCH_SIZE = int(os.environ.get('GEMINI_BATCH_SIZE', '3'))                # Batch processing size
 
 # Gemini feature flags (optimized defaults for production)
-GEMINI_ENABLE_CROSS_VALIDATION = os.environ.get('GEMINI_ENABLE_CROSS_VALIDATION', 'false').lower() == 'true'
+GEMINI_ENABLE_CROSS_VALIDATION = True  # Force cross-validation always on
 
 # Feature availability flags and initialization
 try:

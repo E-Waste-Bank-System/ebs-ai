@@ -304,33 +304,16 @@ class DetectionService:
         """
         Process a single detection through the complete pipeline:
         YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
-        
-        Args:
-            det: YOLO Detection object
-            image_path: Path to source image
-            all_detections: List of all detections for context
-            
-        Returns:
-            FullPrediction with complete analysis, or None if detection is rejected
         """
-        # Step 1: YOLO Detection (already done - we have det)
         yolo_category = det.category
         yolo_confidence = det.confidence
         logger.info(f"Processing YOLO detection: '{yolo_category}' (confidence: {yolo_confidence:.3f})")
-        
-        # Crop the detection for Gemini analysis
         cropped_path = self._save_cropped_bbox(image_path, det.bbox, yolo_category)
-        
         try:
-            # Check crop validity
             if not self._is_valid_crop(cropped_path):
                 logger.warning(f"Small crop for {yolo_category}, using fallback processing")
-                
-                # For small crops, skip Gemini and go straight to mapping and pricing
                 validated_yolo_category = yolo_category
                 detection_source = "YOLO (small crop)"
-                
-                # Map to price category and predict price
                 price_category = get_mapped_category(validated_yolo_category)
                 price = safe_execute(
                     self.price_predictor.predict_price,
@@ -338,12 +321,10 @@ class DetectionService:
                     f"Price prediction failed for {price_category}",
                     price_category
                 )
-                
                 return create_fallback_prediction(
                     yolo_category, yolo_confidence, det.bbox, price, detection_source
                 )
-            
-            # Prepare context for Gemini
+
             prompt_context = {
                 "all_detections": [
                     {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} 
@@ -352,21 +333,19 @@ class DetectionService:
                 "focus_bbox": det.bbox,
                 "focus_label": yolo_category
             }
-            
+
             # Step 2: Gemini Validation (validates YOLO categories)
             batch_result = await safe_execute(
                 self.gemini_service.process_batch_analysis,
                 self._get_default_batch_result(yolo_category),
                 f"Gemini batch analysis failed for {yolo_category}",
                 cropped_path,
-                yolo_category,  # For content generation
+                yolo_category,  # For content generation (will be replaced below)
                 yolo_prediction=yolo_category,  # For validation
                 yolo_confidence=yolo_confidence,
                 extra_image_path=None,
                 prompt_context=prompt_context
             )
-            
-            # Extract results from batch processing
             validation = batch_result.get("validation")
             description = batch_result.get("description", f"Perangkat elektronik {yolo_category.lower()}")
             suggestions = batch_result.get("suggestions", [
@@ -375,21 +354,57 @@ class DetectionService:
                 "Bawa ke pusat daur ulang e-waste"
             ])
             damage_level = batch_result.get("damage_level")
-            
+
             # Step 3: Determine validated YOLO category
             validated_yolo_category, detection_source = self._determine_validated_yolo_category(
                 validation, yolo_category, description
             )
-            
+
+            # --- Always run cross-validation after description generation ---
+            if GEMINI_ENABLE_CROSS_VALIDATION:
+                cross_validated_category = await safe_execute(
+                    self.gemini_service.cross_validate_category,
+                    validated_yolo_category,
+                    f"Cross-validation failed for {yolo_category}",
+                    description, yolo_category, validated_yolo_category
+                )
+                if cross_validated_category != validated_yolo_category:
+                    logger.info(f"Cross-validation corrected: '{validated_yolo_category}' → '{cross_validated_category}'")
+                    validated_yolo_category = cross_validated_category
+                    detection_source = "Cross-validated"
+                    # Regenerate content with new category
+                    description = await safe_execute(
+                        self.gemini_service.generate_description,
+                        f"Perangkat elektronik {validated_yolo_category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis",
+                        f"Description regeneration failed for {validated_yolo_category}",
+                        cropped_path, validated_yolo_category, None, prompt_context
+                    )
+                    suggestions = await safe_execute(
+                        self.gemini_service.generate_suggestions,
+                        [
+                            "Periksa panduan dari manufacturer resmi",
+                            "Pisahkan komponen berbahaya dengan hati hati",
+                            "Bawa ke pusat daur ulang terdekat"
+                        ],
+                        f"Suggestions regeneration failed for {validated_yolo_category}",
+                        cropped_path, validated_yolo_category, None, prompt_context
+                    )
+                    damage_level, _ = await safe_execute(
+                        self.gemini_service.analyze_damage_level,
+                        (None, None),
+                        f"Damage analysis regeneration failed for {validated_yolo_category}",
+                        cropped_path, validated_yolo_category, None, prompt_context
+                    )
+
             # Check if detection was rejected - if so, return None to exclude from results
             if detection_source == "Rejected":
                 logger.info(f"Detection rejected by Gemini: {yolo_category} - excluding from results")
                 return None
-            
+
             # Step 4: YOLO-to-Price Mapping (after Gemini validation)
             price_category = get_mapped_category(validated_yolo_category)
             logger.info(f"YOLO→Price mapping: '{validated_yolo_category}' → '{price_category}'")
-            
+
             # Step 5: Price Prediction
             price = safe_execute(
                 self.price_predictor.predict_price,
@@ -397,13 +412,34 @@ class DetectionService:
                 f"Price prediction failed for {price_category}",
                 price_category
             )
-            
+
             # Calculate risk level based on final categories
             risk_level = calculate_risk_level(validated_yolo_category, yolo_confidence)
-            
-            # Log the complete pipeline result
+
+            # --- Post-processing consistency check ---
+            # If description or suggestions do not mention the validated category, regenerate them
+            if validated_yolo_category.lower() not in description.lower():
+                logger.info(f"Regenerating description for consistency with category '{validated_yolo_category}'")
+                description = await safe_execute(
+                    self.gemini_service.generate_description,
+                    f"Perangkat elektronik {validated_yolo_category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis",
+                    f"Description regeneration failed for {validated_yolo_category}",
+                    cropped_path, validated_yolo_category, None, prompt_context
+                )
+            if not any(validated_yolo_category.lower() in s.lower() for s in suggestions):
+                logger.info(f"Regenerating suggestions for consistency with category '{validated_yolo_category}'")
+                suggestions = await safe_execute(
+                    self.gemini_service.generate_suggestions,
+                    [
+                        "Periksa panduan dari manufacturer resmi",
+                        "Pisahkan komponen berbahaya dengan hati hati",
+                        "Bawa ke pusat daur ulang terdekat"
+                    ],
+                    f"Suggestions regeneration failed for {validated_yolo_category}",
+                    cropped_path, validated_yolo_category, None, prompt_context
+                )
+
             logger.info(f"Complete pipeline: {yolo_category} → {validated_yolo_category} → {price_category}, price: {price}, source: {detection_source}")
-            
             return FullPrediction(
                 id=generate_unique_id(),
                 category=validated_yolo_category,  # Display the validated YOLO category
@@ -416,10 +452,8 @@ class DetectionService:
                 damage_level=damage_level,
                 detection_source=detection_source
             )
-            
         except Exception as e:
             logger.error(f"Error processing detection {yolo_category}: {str(e)}")
-            # Return basic prediction on error
             price_category = get_mapped_category(yolo_category)
             price = safe_execute(
                 self.price_predictor.predict_price,
@@ -427,12 +461,10 @@ class DetectionService:
                 f"Fallback price prediction failed for {price_category}",
                 price_category
             )
-            
             return create_fallback_prediction(
                 yolo_category, yolo_confidence, det.bbox, price, "YOLO (error fallback)"
             )
         finally:
-            # Cleanup cropped image
             if cropped_path and os.path.exists(cropped_path):
                 os.remove(cropped_path)
     
