@@ -449,53 +449,36 @@ JSON only:
     def _create_yolo_validation_prompt(self, yolo_prediction: str, yolo_confidence: float, prompt_context: dict = None) -> str:
         """
         Create optimized validation prompt for YOLO category validation.
-        
-        Args:
-            yolo_prediction: YOLO's predicted category
-            yolo_confidence: YOLO's confidence score
-            prompt_context: Optional context with all detections
-            
-        Returns:
-            Formatted prompt for Gemini validation
         """
-        # Get all YOLO categories for the prompt
         yolo_categories = get_all_yolo_classes()
         categories_list = ", ".join(sorted(yolo_categories))
-        
-        prompt = f"""YOLO AI detected: {yolo_prediction} (confidence: {yolo_confidence:.2f})
+        prompt = f"""You are an expert e-waste inspector. Your job is to identify the MAIN electronic device in the CENTER of this cropped image.
 
-Look at this cropped image carefully. What electronic device do you actually see?
-
-Choose the EXACT category name from this YOLO detection list:
+IMPORTANT:
+- Focus ONLY on the main object in the center of the image. Ignore any background, hands, or other devices that may be partially visible.
+- Choose the EXACT category name from this list:
 {categories_list}
-
-IMPORTANT GUIDELINES:
-- For smartphones/mobile phones → use "Phone"
-- For walkie-talkies/two-way radios → use "Walkie Talkie"
-- For desktop computers → use "PC Case" or "CPU Component"
-- For gaming controllers → use "Stick Ps"
+- If you are unsure, prefer the provided hint: '{yolo_prediction}'. Only override if you are VERY certain the object is a different category.
+- If it's not electronic waste, return 'null'.
+- For smartphones/mobile phones → use 'Phone'
+- For walkie-talkies/two-way radios → use 'Walkie Talkie'
+- For desktop computers → use 'PC Case' or 'CPU Component'
+- For gaming controllers → use 'Stick Ps'
 - If you see multiple similar devices, choose the most specific one
-- If it's not electronic waste, return "null"
 
-Context: This is part of an e-waste detection system. The image has been cropped from a larger image containing the detected object with 20% padding for context.
+Context: This image is a square crop centered on the detected object, with minimal background for clarity. The YOLO AI detected: {yolo_prediction} (confidence: {yolo_confidence:.2f}).
 """
-
         if prompt_context and "all_detections" in prompt_context:
             detections_info = [
                 f"- {d['category']} (conf: {d['confidence']:.2f})"
-                for d in prompt_context["all_detections"][:5]  # Limit to first 5 for brevity
+                for d in prompt_context["all_detections"][:5]
             ]
-            prompt += f"""
-
-Other detections in the full image:
-{chr(10).join(detections_info)}
-"""
-
-        prompt += f"""
+            prompt += f"\nOther detections in the full image:\n{chr(10).join(detections_info)}\n"
+        prompt += """
 
 JSON format only:
-{{"is_valid_ewaste": true/false, "best_yolo_category": "exact YOLO category name from list above or null", "reasoning": "brief description of what you see", "confidence_assessment": "high/medium/low based on image clarity"}}"""
-
+{"is_valid_ewaste": true/false, "best_yolo_category": "exact YOLO category name from list above or null", "reasoning": "brief description of what you see", "confidence_assessment": "high/medium/low based on image clarity"}
+"""
         return prompt
     
     def _process_yolo_validation_response(

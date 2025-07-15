@@ -13,7 +13,7 @@ google-cloud-storage
 google-generativeai
 
 # ML packages with EXACT versions to match trained models
-scikit-learn
+scikit-learn=1.6.1
 pandas
 joblib
 scipy==1.15.3

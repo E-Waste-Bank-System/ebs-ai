@@ -149,41 +149,57 @@ class DetectionService:
     
     def _save_cropped_bbox(self, image_path: str, bbox: List[float], label: str) -> str:
         """
-        Crop the image to the bounding box with 20% padding for context and save to a temp file.
-        
-        Args:
-            image_path: Path to source image
-            bbox: Bounding box coordinates [x1, y1, x2, y2]
-            label: Label for the crop (used in filename)
-            
-        Returns:
-            Path to the cropped image file
+        Crop the image to the bounding box with improved logic for LLM input.
+        - 10% padding for context
+        - Minimum crop size: 64x64 px
+        - Maximum crop size: 512x512 px
+        - Square crop centered on the object
         """
         image = Image.open(image_path).convert("RGB")
         img_width, img_height = image.size
-        
+
         # Extract bbox coordinates
         x1, y1, x2, y2 = bbox
-        
-        # Add 20% padding for context
         width = x2 - x1
         height = y2 - y1
-        padding_x = width * 0.2
-        padding_y = height * 0.2
-        
-        # Calculate padded coordinates, ensuring they stay within image bounds
-        padded_x1 = max(0, x1 - padding_x)
-        padded_y1 = max(0, y1 - padding_y)
-        padded_x2 = min(img_width, x2 + padding_x)
-        padded_y2 = min(img_height, y2 + padding_y)
-        
-        # Ensure bbox is int for cropping
-        bbox_int = [int(padded_x1), int(padded_y1), int(padded_x2), int(padded_y2)]
+        padding = max(width, height) * 0.10  # 10% of the largest dimension
+
+        # Center of the bbox
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        # Make square crop
+        half_side = max(width, height) / 2 + padding
+        # Clamp to min/max
+        half_side = max(half_side, 32)  # min 64x64
+        half_side = min(half_side, 256) # max 512x512
+        # Calculate square crop coordinates
+        crop_x1 = int(max(0, cx - half_side))
+        crop_y1 = int(max(0, cy - half_side))
+        crop_x2 = int(min(img_width, cx + half_side))
+        crop_y2 = int(min(img_height, cy + half_side))
+        # Ensure min size
+        if crop_x2 - crop_x1 < 64:
+            diff = 64 - (crop_x2 - crop_x1)
+            crop_x1 = max(0, crop_x1 - diff // 2)
+            crop_x2 = min(img_width, crop_x2 + diff - diff // 2)
+        if crop_y2 - crop_y1 < 64:
+            diff = 64 - (crop_y2 - crop_y1)
+            crop_y1 = max(0, crop_y1 - diff // 2)
+            crop_y2 = min(img_height, crop_y2 + diff - diff // 2)
+        # Ensure max size
+        if crop_x2 - crop_x1 > 512:
+            center = (crop_x1 + crop_x2) // 2
+            crop_x1 = max(0, center - 256)
+            crop_x2 = min(img_width, center + 256)
+        if crop_y2 - crop_y1 > 512:
+            center = (crop_y1 + crop_y2) // 2
+            crop_y1 = max(0, center - 256)
+            crop_y2 = min(img_height, center + 256)
+        bbox_int = [int(crop_x1), int(crop_y1), int(crop_x2), int(crop_y2)]
         cropped = image.crop(bbox_int)
-        
         temp_cropped = tempfile.NamedTemporaryFile(suffix=f'_{label}.jpg', delete=False)
         cropped.save(temp_cropped.name)
-        logger.info(f"Cropped image for '{label}' with 20% padding saved: {temp_cropped.name} (size: {cropped.size})")
+        logger.info(f"Cropped image for '{label}' saved: {temp_cropped.name} (coords: {bbox_int}, size: {cropped.size})")
         return temp_cropped.name
 
     def _is_valid_crop(self, crop_path: str, min_size: int = 50) -> bool:
