@@ -45,7 +45,7 @@ GEMINI_MODEL = 'gemini-2.5-flash'
 
 # Gemini generation settings (optimized for speed and accuracy)
 GEMINI_MAX_TOKENS = 2048          # Maximum tokens for responses
-GEMINI_TEMPERATURE = 0.3          # Low temperature for consistent validation
+GEMINI_TEMPERATURE = 0.0          # Lowered for deterministic results
 GEMINI_TOP_P = 0.8               # Focus on high-probability responses
 
 # Gemini performance settings (optimized for production)
@@ -89,3 +89,9 @@ PIPELINE_CONFIG = {
 }
 
 logger.info(f"Pipeline configuration: {PIPELINE_CONFIG}")
+
+# Log model paths and envs for debugging
+logger.info(f"YOLO_MODEL_PATH: {YOLO_MODEL_PATH}, exists: {os.path.exists(YOLO_MODEL_PATH)}")
+logger.info(f"KNR_MODEL_PATH: {KNR_MODEL_PATH}, exists: {os.path.exists(KNR_MODEL_PATH)}")
+logger.info(f"ENCODER_PATH: {ENCODER_PATH}, exists: {os.path.exists(ENCODER_PATH)}")
+logger.info(f"GEMINI_API_KEY: {'set' if GEMINI_API_KEY else 'not set'}")

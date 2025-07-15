@@ -90,9 +90,11 @@ class GeminiService:
             
             # Build intelligent prompt for YOLO category validation
             prompt = self._create_yolo_validation_prompt(yolo_prediction, yolo_confidence, prompt_context)
+            logger.info(f"[Gemini] Prompt for validation: {prompt}")
             
             # Gemini call with timeout
             response = await self._call_gemini_with_timeout(prompt, images)
+            logger.info(f"[Gemini] Raw response: {response}")
             if not response:
                 logger.warning("Empty Gemini validation response")
                 return ValidationResult(
@@ -146,8 +148,10 @@ Format: "[device] [condition description]"
 Example: "Laptop rusak layar retak baterai bocor casing tergores kondisi buruk"
 IMPORTANT: Must be between 10-15 words, no more, no less.
 """
+            logger.info(f"[Gemini] Prompt for description: {prompt}")
             
             response = await self._call_gemini_with_timeout(prompt, images)
+            logger.info(f"[Gemini] Raw response: {response}")
             if response and response.strip():
                 description = response.strip()
                 # Clean up the description - remove any extra formatting
@@ -230,8 +234,10 @@ IMPORTANT: Must be between 10-15 words, no more, no less.
 
             IMPORTANT: Each suggestion must be 5-7 words only. No markdown elements.
             """
+            logger.info(f"[Gemini] Prompt for suggestions: {prompt}")
             
             response = await self._call_gemini_with_timeout(prompt, images)
+            logger.info(f"[Gemini] Raw response: {response}")
             if response:
                 # Parse numbered list
                 suggestions = []
@@ -371,8 +377,10 @@ IMPORTANT: Must be between 10-15 words, no more, no less.
 
 JSON only:
 {{"damage_level":1-10, "analysis": "brief condition"}}"""
+            logger.info(f"[Gemini] Prompt for damage analysis: {prompt}")
             
             response = await self._call_gemini_with_timeout(prompt, images)
+            logger.info(f"[Gemini] Raw response: {response}")
             
             if not response:
                 return 5, "Damage analysis failed - empty response"
@@ -562,14 +570,23 @@ JSON format only:
                         gemini_feedback=f"YOLO detection confirmed ({confidence_assessment} confidence): {reasoning}"
                     )
                 else:
-                    # Gemini corrected YOLO's prediction to a different YOLO category
-                    logger.info(f"Gemini corrected YOLO: {yolo_prediction} → {best_yolo_category}")
-                    return ValidationResult(
-                        is_valid=True,
-                        final_category=best_yolo_category,
-                        detection_source="Gemini Corrected",
-                        gemini_feedback=f"Corrected from {yolo_prediction} to {best_yolo_category} ({confidence_assessment} confidence): {reasoning}"
-                    )
+                    # Only accept correction if confidence_assessment is high
+                    if confidence_assessment.lower() == "high":
+                        logger.info(f"Gemini corrected YOLO: {yolo_prediction} → {best_yolo_category} (high confidence)")
+                        return ValidationResult(
+                            is_valid=True,
+                            final_category=best_yolo_category,
+                            detection_source="Gemini Corrected",
+                            gemini_feedback=f"Corrected from {yolo_prediction} to {best_yolo_category} ({confidence_assessment} confidence): {reasoning}"
+                        )
+                    else:
+                        logger.info(f"Gemini suggested correction {yolo_prediction} → {best_yolo_category} but confidence was {confidence_assessment}, ignoring correction.")
+                        return ValidationResult(
+                            is_valid=True,
+                            final_category=yolo_prediction,
+                            detection_source="YOLO",
+                            gemini_feedback=f"Gemini suggested correction but confidence was {confidence_assessment}, ignored."
+                        )
             else:
                 # No valid category provided or category not in YOLO list
                 if best_yolo_category == "null" or best_yolo_category is None:
