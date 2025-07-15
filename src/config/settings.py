@@ -24,9 +24,9 @@ PROJECT_ROOT = str(Path(__file__).parent.parent.parent)
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 
 # Model paths
-YOLO_MODEL_PATH = os.path.join(MODELS_DIR, "sy3.pt")           # YOLO model for 37 categories
-KNR_MODEL_PATH = os.path.join(MODELS_DIR, "model_knr_best.joblib")  # Price prediction for 33 categories
-ENCODER_PATH = os.path.join(MODELS_DIR, "encoder_target.joblib")     # Price category encoder
+YOLO_MODEL_PATH = os.environ.get('MODEL_PATH', os.path.join(MODELS_DIR, "sy3.pt"))           # YOLO model for 37 categories
+KNR_MODEL_PATH = os.environ.get('KNR_MODEL_PATH', os.path.join(MODELS_DIR, "model_knr_best.joblib"))  # Price prediction for 33 categories
+ENCODER_PATH = os.environ.get('KNR_ENCODER_PATH', os.path.join(MODELS_DIR, "encoder_target.joblib"))     # Price category encoder
 
 # API Configuration
 API_TITLE = "E-Waste Detection API"
@@ -49,13 +49,12 @@ GEMINI_TEMPERATURE = 0.3          # Low temperature for consistent validation
 GEMINI_TOP_P = 0.8               # Focus on high-probability responses
 
 # Gemini performance settings (optimized for production)
-GEMINI_MAX_WORKERS = int(os.environ.get('GEMINI_MAX_WORKERS', '8'))               # Parallel workers
-GEMINI_TIMEOUT = float(os.environ.get('GEMINI_TIMEOUT', '12.0'))                  # Overall timeout
-GEMINI_REQUEST_TIMEOUT = float(os.environ.get('GEMINI_REQUEST_TIMEOUT', '10.0'))  # Per-request timeout
-GEMINI_MAX_CONCURRENT_REQUESTS = int(os.environ.get('GEMINI_MAX_CONCURRENT_REQUESTS', '4'))  # Concurrent limit
-GEMINI_BATCH_SIZE = int(os.environ.get('GEMINI_BATCH_SIZE', '3'))                # Batch processing size
+GEMINI_MAX_WORKERS = 8
+GEMINI_TIMEOUT = 12.0
+GEMINI_REQUEST_TIMEOUT =10.0
+GEMINI_MAX_CONCURRENT_REQUESTS = 4
+GEMINI_BATCH_SIZE = 3
 
-# Gemini feature flags (optimized defaults for production)
 GEMINI_ENABLE_CROSS_VALIDATION = True  # Force cross-validation always on
 
 # Feature availability flags and initialization
