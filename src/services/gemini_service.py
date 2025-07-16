@@ -454,16 +454,16 @@ JSON only:
         categories_list = ", ".join(sorted(yolo_categories))
         prompt = f"""You are an expert e-waste inspector. Your job is to identify the MAIN electronic device in the CENTER of this cropped image.
 
-IMPORTANT:
-- Choose the EXACT category name from this list:
-{categories_list}
-- If you are unsure, prefer the provided hint: '{yolo_prediction}'. Only override if you are VERY certain the object is a different category.
-- If it's not electronic waste, return 'null'.
-- For smartphones/mobile phones → use 'Phone'
-- For walkie-talkies/two-way radios → use 'Walkie Talkie'
-- For desktop computers → use 'PC Case' or 'CPU Component'
-- For gaming controllers → use 'Stick Ps'
-"""
+        IMPORTANT:
+        - Choose the EXACT category name from this list:
+        {categories_list}
+        - If you are unsure, prefer the provided hint: '{yolo_prediction}'. Only override if you are VERY certain the object is a different category.
+        - If it's not electronic waste, return 'null'.
+        - For smartphones/mobile phones → use 'Phone'
+        - For walkie-talkies/two-way radios → use 'Walkie Talkie'
+        - For desktop computers → use 'PC Case' or 'CPU Component'
+        - For gaming controllers → use 'Stick Ps'
+        """
         if prompt_context and "all_detections" in prompt_context:
             detections_info = [
                 f"- {d['category']} (conf: {d['confidence']:.2f})"
@@ -472,9 +472,9 @@ IMPORTANT:
             prompt += f"\nOther detections in the full image:\n{chr(10).join(detections_info)}\n"
         prompt += """
 
-JSON format only:
-{"is_valid_ewaste": true/false, "best_yolo_category": "exact YOLO category name from list above or null", "reasoning": "brief description of what you see", "confidence_assessment": "high/medium/low based on image clarity"}
-"""
+        JSON format only:
+        {"is_valid_ewaste": true/false, "best_yolo_category": "exact YOLO category name from list above or null", "reasoning": "brief description of what you see", "confidence_assessment": "high/medium/low based on image clarity"}
+        """
         return prompt
     
     def _process_yolo_validation_response(
