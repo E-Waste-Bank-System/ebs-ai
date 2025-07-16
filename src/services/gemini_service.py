@@ -455,7 +455,6 @@ JSON only:
         prompt = f"""You are an expert e-waste inspector. Your job is to identify the MAIN electronic device in the CENTER of this cropped image.
 
 IMPORTANT:
-- Focus ONLY on the main object in the center of the image. Ignore any background, hands, or other devices that may be partially visible.
 - Choose the EXACT category name from this list:
 {categories_list}
 - If you are unsure, prefer the provided hint: '{yolo_prediction}'. Only override if you are VERY certain the object is a different category.
@@ -464,9 +463,6 @@ IMPORTANT:
 - For walkie-talkies/two-way radios → use 'Walkie Talkie'
 - For desktop computers → use 'PC Case' or 'CPU Component'
 - For gaming controllers → use 'Stick Ps'
-- If you see multiple similar devices, choose the most specific one
-
-Context: This image is a square crop centered on the detected object, with minimal background for clarity. The YOLO AI detected: {yolo_prediction} (confidence: {yolo_confidence:.2f}).
 """
         if prompt_context and "all_detections" in prompt_context:
             detections_info = [
