@@ -24,7 +24,7 @@ PROJECT_ROOT = str(Path(__file__).parent.parent.parent)
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 
 # Model paths
-YOLO_MODEL_PATH = os.environ.get('MODEL_PATH', os.path.join(MODELS_DIR, "sy3.pt"))           # YOLO model for 37 categories
+YOLO_MODEL_PATH = os.environ.get('MODEL_PATH', os.path.join(MODELS_DIR, "best.pt"))           # YOLO model for 37 categories
 KNR_MODEL_PATH = os.environ.get('KNR_MODEL_PATH', os.path.join(MODELS_DIR, "model_knr_best.joblib"))  # Price prediction for 33 categories
 ENCODER_PATH = os.environ.get('KNR_ENCODER_PATH', os.path.join(MODELS_DIR, "encoder_target.joblib"))     # Price category encoder
 
