@@ -8,6 +8,7 @@ This module handles stage 4: Predicts prices using 33 price model categories
 
 import os
 import logging
+import sys
 from typing import List, Optional
 import joblib
 from joblib import load
@@ -18,6 +19,7 @@ from src.config.settings import REG_MODEL_PATH
 from src.utils.mappings import PRICE_CATEGORIES, is_valid_price_category
 
 logger = logging.getLogger(__name__)
+sys.modules['__main__'].Regresih = Regresih
 
 
 class PricePredictor:
