@@ -12,7 +12,7 @@ from typing import List, Optional
 import joblib
 import pandas as pd
 
-from src.config.settings import KNR_MODEL_PATH, ENCODER_PATH
+from src.config.settings import REG_MODEL_PATH
 from src.utils.mappings import PRICE_CATEGORIES, is_valid_price_category
 
 logger = logging.getLogger(__name__)
@@ -42,42 +42,44 @@ class PricePredictor:
         """
         try:
             # Check if model files exist
-            if not os.path.exists(KNR_MODEL_PATH):
-                logger.error(f"KNR model file not found: {KNR_MODEL_PATH}")
+            if not os.path.exists(REG_MODEL_PATH):
+                logger.error(f"KNR model file not found: {REG_MODEL_PATH}")
                 return False
                 
-            if not os.path.exists(ENCODER_PATH):
-                logger.error(f"Encoder file not found: {ENCODER_PATH}")
-                return False
+            # if not os.path.exists(ENCODER_PATH):
+            #     logger.error(f"Encoder file not found: {ENCODER_PATH}")
+            #     return False
             
-            logger.info(f"Loading KNR model from: {KNR_MODEL_PATH}")
-            logger.info(f"Loading encoder from: {ENCODER_PATH}")
+            logger.info(f"Loading KNR model from: {REG_MODEL_PATH}")
+            # logger.info(f"Loading encoder from: {ENCODER_PATH}")
             
             # Load the models with better error handling
             try:
-                self.model = joblib.load(KNR_MODEL_PATH)
+                self.model = joblib.load(REG_MODEL_PATH)
                 logger.info("KNR price prediction model loaded successfully")
             except Exception as model_error:
                 logger.error(f"Failed to load KNR model: {str(model_error)}")
                 logger.error(f"Model error type: {type(model_error).__name__}")
                 return False
             
-            try:
-                self.encoder = joblib.load(ENCODER_PATH)
-                logger.info("Price category encoder loaded successfully")
-            except Exception as encoder_error:
-                logger.error(f"Failed to load encoder: {str(encoder_error)}")
-                logger.error(f"Encoder error type: {type(encoder_error).__name__}")
-                return False
+            # try:
+            #     self.encoder = joblib.load(ENCODER_PATH)
+            #     logger.info("Price category encoder loaded successfully")
+            # except Exception as encoder_error:
+            #     logger.error(f"Failed to load encoder: {str(encoder_error)}")
+            #     logger.error(f"Encoder error type: {type(encoder_error).__name__}")
+            #     return False
             
             # Test the models with a sample prediction
             try:
                 test_categories = list(PRICE_CATEGORIES)[:3]  # Test with first 3 categories
                 for test_cat in test_categories:
-                    test_df = pd.DataFrame({'Nama Item': [test_cat]})
-                    test_encoded = self.encoder.transform(test_df)
-                    test_prediction = self.model.predict(test_encoded)
-                    logger.info(f"Test price prediction for {test_cat}: {int(test_prediction[0])} IDR")
+                    test_df = pd.DataFrame({
+                        "Nama Item": [test_cat],
+                        "Kondisi": ["Baik"]
+                    })
+                    test_prediction = self.model.predict(test_df)
+                    logger.info(f"Test price prediction for {test_cat}: {test_prediction} IDR")
                     break  # Only test one to verify it works
                     
                 self.is_loaded = True
@@ -125,22 +127,26 @@ class PricePredictor:
         
         try:
             # Try different column names that might be expected by the model
-            df = pd.DataFrame({'Nama Item': [price_category]})
-            encoded = self.encoder.transform(df)
-            prediction = self.model.predict(encoded)
+            df = pd.DataFrame({
+                "Nama Item": [price_category],
+                "Kondisi": ["Baik"]
+            })
+            prediction = self.model.predict(df)
             
-            price = int(prediction[0])
+            price = prediction
             logger.info(f"ML price prediction for {price_category}: {price} IDR")
             return price
             
         except KeyError:
             # Fallback to 'name' if 'Nama Item' doesn't work
             try:
-                df = pd.DataFrame({'name': [price_category]})
-                encoded = self.encoder.transform(df)
-                prediction = self.model.predict(encoded)
+                df = pd.DataFrame({
+                    "name": [price_category],
+                    "Kondisi": ["Baik"]
+                })
+                prediction = self.model.predict(df)
                 
-                price = int(prediction[0])
+                price = prediction
                 logger.info(f"ML price prediction for {price_category}: {price} IDR (fallback column)")
                 return price
                 
@@ -218,8 +224,7 @@ class PricePredictor:
         """
         return {
             "model_loaded": self.is_loaded,
-            "model_path": KNR_MODEL_PATH if self.is_loaded else None,
-            "encoder_path": ENCODER_PATH if self.is_loaded else None,
+            "model_path": REG_MODEL_PATH if self.is_loaded else None,
             "categories_count": len(PRICE_CATEGORIES),
             "pipeline_stage": "4 - Price Prediction",
             "input": "Price model categories (after YOLO→Price mapping)",

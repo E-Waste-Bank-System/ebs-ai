@@ -17,16 +17,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the model files
 COPY models/best.pt models/
-COPY models/model_knr_best.joblib models/
-COPY models/encoder_target.joblib models/
+COPY models/regresih.joblib models/
 
 # Copy the rest of the application
 COPY . .
 
 # Set environment variables
 ENV MODEL_PATH=/app/models/best.pt
-ENV KNR_MODEL_PATH=/app/models/model_knr_best.joblib
-ENV KNR_ENCODER_PATH=/app/models/encoder_target.joblib
+ENV REG_MODEL_PATH=/app/models/regresih.joblib
 ENV PORT=8080
 ENV DEBUG=False
 ENV PYTHONPATH=/app

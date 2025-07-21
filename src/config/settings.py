@@ -25,8 +25,7 @@ MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 
 # Model paths
 YOLO_MODEL_PATH = os.environ.get('MODEL_PATH', os.path.join(MODELS_DIR, "best.pt"))           # YOLO model for 37 categories
-KNR_MODEL_PATH = os.environ.get('KNR_MODEL_PATH', os.path.join(MODELS_DIR, "model_knr_best.joblib"))  # Price prediction for 33 categories
-ENCODER_PATH = os.environ.get('KNR_ENCODER_PATH', os.path.join(MODELS_DIR, "encoder_target.joblib"))     # Price category encoder
+REG_MODEL_PATH = os.environ.get('REG_MODEL_PATH', os.path.join(MODELS_DIR, "regresih.joblib"))  # Price prediction for 33 categories
 
 # API Configuration
 API_TITLE = "E-Waste Detection API"
@@ -92,6 +91,5 @@ logger.info(f"Pipeline configuration: {PIPELINE_CONFIG}")
 
 # Log model paths and envs for debugging
 logger.info(f"YOLO_MODEL_PATH: {YOLO_MODEL_PATH}, exists: {os.path.exists(YOLO_MODEL_PATH)}")
-logger.info(f"KNR_MODEL_PATH: {KNR_MODEL_PATH}, exists: {os.path.exists(KNR_MODEL_PATH)}")
-logger.info(f"ENCODER_PATH: {ENCODER_PATH}, exists: {os.path.exists(ENCODER_PATH)}")
+logger.info(f"REG_MODEL_PATH: {REG_MODEL_PATH}, exists: {os.path.exists(REG_MODEL_PATH)}")
 logger.info(f"GEMINI_API_KEY: {'set' if GEMINI_API_KEY else 'not set'}")
