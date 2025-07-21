@@ -35,9 +35,9 @@ YOLO_TO_PRICE_MAP = {
    "CPU Component": "Komponen CPU",
    "Cables": "Adaptor /Kilo",
    "Calculator": "Alat Tes Vol",
-   "Charger": "Adaptor /Kilo",
-   "Clock": "Jam Tangan",
-   "DVD Player": "TV",
+   "Charger": "Charger Laptop",
+   "Clock": "Jam Dinding",
+   "DVD Player": "DVD Player",
    "Electronic Socket": "Adaptor /Kilo",
    
    # Appliances
@@ -47,7 +47,7 @@ YOLO_TO_PRICE_MAP = {
    "Iron": "Seterika",
    "Lamp": "Lampu",
    "Microwave": "Microwave",
-   "Rice Cooker": "Kompor Listrik",
+   "Rice Cooker": "Magicom",
    "Washing Machine": "Mesin Cuci",
    
    # Computing Devices
@@ -56,22 +56,22 @@ YOLO_TO_PRICE_MAP = {
    "Keyboard": "Keyboard",
    "Laptop": "Laptop",
    "Monitor": "Monitor",
-   "Motherboard": "Komponen CPU",
+   "Motherboard": "Motherboard",
    "Mouse": "Mouse",
-   "PC Case": "CPU Intel",
+   "PC Case": "Komponen CPU",
    "Printer": "Printer",
    "Router": "Router",
    
    # Communication and Entertainment
-   "Microphone": "Speaker",
+   "Microphone": "Microfon",
    "Phone": "Handphone",           # Smartphones/mobile phones
-   "Powerbank": "Baterai Laptop",
-   "Radio": "Speaker",
+   "Powerbank": "Power Bank",
+   "Radio": "Radio",
    "Remote": "Remot",
    "Speaker": "Speaker",
-   "Stick Ps": "PS2",             # Gaming controllers
+   "Stick Ps": "Stik Ps",             # Gaming controllers
    "Television": "TV",
-   "Walkie Talkie": "Telefon",    # Two-way radios
+   "Walkie Talkie": "Walkie Talkie",    # Two-way radios
    
    # Specialized Equipment
    "Solar Panel": "Panel Surya"
