@@ -16,6 +16,7 @@ google-generativeai
 scikit-learn==1.6.1
 pandas
 joblib
+xgboost
 scipy==1.15.3
 category_encoders
 
