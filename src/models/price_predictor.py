@@ -83,7 +83,13 @@ class PricePredictor:
                         "Kondisi": ["Baik"]
                     })
                     test_prediction = self.model.predict(test_df)
-                    logger.info(f"Test price prediction for {test_cat}: {test_prediction} IDR")
+                    # Convert prediction to integer for consistent logging
+                    if test_prediction is not None and len(test_prediction) > 0:
+                        test_price = int(test_prediction[0]) if hasattr(test_prediction, '__getitem__') else int(test_prediction)
+                        logger.info(f"Test price prediction for {test_cat}: {test_price} IDR")
+                    else:
+                        logger.error(f"Test prediction returned None or empty for {test_cat}")
+                        return False
                     break  # Only test one to verify it works
                     
                 self.is_loaded = True
@@ -135,11 +141,18 @@ class PricePredictor:
                 "Nama Item": [price_category],
                 "Kondisi": ["Baik"]
             })
+            
+            print(type(self.model))
             prediction = self.model.predict(df)
             
-            price = prediction
-            logger.info(f"ML price prediction for {price_category}: {price} IDR")
-            return price
+            # Convert prediction to integer (prediction is usually a numpy array)
+            if prediction is not None and len(prediction) > 0:
+                price = int(prediction[0]) if hasattr(prediction, '__getitem__') else int(prediction)
+                logger.info(f"ML price prediction for {price_category}: {price} IDR")
+                return price
+            else:
+                logger.error(f"Model returned None or empty prediction for {price_category}")
+                return self._get_fallback_price(price_category)
             
         except KeyError:
             # Fallback to 'name' if 'Nama Item' doesn't work
@@ -150,9 +163,14 @@ class PricePredictor:
                 })
                 prediction = self.model.predict(df)
                 
-                price = prediction
-                logger.info(f"ML price prediction for {price_category}: {price} IDR (fallback column)")
-                return price
+                # Convert prediction to integer (prediction is usually a numpy array)
+                if prediction is not None and len(prediction) > 0:
+                    price = int(prediction[0]) if hasattr(prediction, '__getitem__') else int(prediction)
+                    logger.info(f"ML price prediction for {price_category}: {price} IDR (fallback column)")
+                    return price
+                else:
+                    logger.error(f"Model returned None or empty prediction for {price_category} (fallback column)")
+                    return self._get_fallback_price(price_category)
                 
             except Exception as e:
                 logger.error(f"Price prediction failed with both column names: {str(e)}")

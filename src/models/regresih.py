@@ -15,3 +15,5 @@ class Regresih:
         # 2) predict on your already-trained model
         y_scaled = self.model.predict(X_new)
         # 3) inverse-scale to original units
+        y_pred = self.y_scaler.inverse_transform(y_scaled.reshape(-1, 1))
+        return y_pred.flatten()
