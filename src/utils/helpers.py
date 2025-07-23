@@ -4,7 +4,9 @@ Helper functions for E-waste detection system
 Pipeline: YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
 """
 
+import time
 import uuid
+import asyncio
 import logging
 from typing import List, Optional, Any, Callable, TypeVar
 from functools import wraps
@@ -13,6 +15,27 @@ from src.config.settings import LOW_CONFIDENCE_THRESHOLD
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
+
+def damage_level_to_condition(damage_level: Optional[int]) -> str:
+    """
+    Convert damage level (1-10) to condition category for price prediction
+    
+    Args:
+        damage_level: Damage level from 1-10 (1=Excellent, 10=Severe) or None
+        
+    Returns:
+        Condition string: "Baik", "Biasa", or "Buruk"
+    """
+    if damage_level is None:
+        return "Baik"
+    
+    if damage_level <= 3:
+        return "Baik"
+    elif damage_level <= 6:
+        return "Biasa"
+    else:
+        return "Buruk"
+
 
 def generate_unique_id() -> str:
     """Generate unique ID for detections"""
@@ -45,7 +68,6 @@ def log_execution_time(func_name: str = ""):
     def decorator(func):
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
-            import time
             start_time = time.time()
             try:
                 result = await func(*args, **kwargs)
@@ -59,7 +81,6 @@ def log_execution_time(func_name: str = ""):
         
         @wraps(func)
         def sync_wrapper(*args, **kwargs):
-            import time
             start_time = time.time()
             try:
                 result = func(*args, **kwargs)
@@ -71,7 +92,6 @@ def log_execution_time(func_name: str = ""):
                 logger.error(f"{func_name or func.__name__} failed after {execution_time:.2f}s: {str(e)}")
                 raise
         
-        import asyncio
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         else:
@@ -109,12 +129,12 @@ def create_fallback_prediction(
         category=category,
         confidence=confidence,
         regression_result=price,
-        description=f"Perangkat elektronik {category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis",  # 10-15 words
+        description=f"Perangkat elektronik {category.lower()} terdeteksi dalam kondisi tidak dapat dianalisis",
         bbox=bbox,
         suggestion=[
-            "Periksa panduan dari manufacturer resmi",        # 6 words
-            "Pisahkan komponen berbahaya dengan hati hati",  # 7 words
-            "Bawa ke pusat daur ulang terdekat"              # 7 words
+            "Periksa panduan dari manufacturer resmi",
+            "Pisahkan komponen berbahaya dengan hati hati",
+            "Bawa ke pusat daur ulang terdekat"
         ],
         risk_lvl=risk_level,
         damage_level=None,
@@ -125,7 +145,6 @@ def create_fallback_prediction(
 def calculate_risk_level(category: str, confidence: float) -> int:
     """
     Calculate environmental/health risk level 1-10 based on YOLO category and confidence
-    Higher risk = more dangerous to environment/health
     
     Args:
         category: YOLO category name (37 classes)
@@ -134,37 +153,30 @@ def calculate_risk_level(category: str, confidence: float) -> int:
     Returns:
         Risk level 1-10 (1=minimal, 10=severe)
     """
-    # Risk levels based on YOLO category names (1-5 base scale)
-    # Categories with high environmental/health risks (large appliances, complex electronics)
     high_risk_categories = {
         "Television", "Fridge", "Microwave", "Washing Machine", 
         "Rice Cooker", "Iron"
     }
     
-    # Categories with medium-high risks (batteries, screens, complex electronics)
     medium_high_risk_categories = {
         "Laptop", "Phone", "Monitor", "Battery", "Powerbank",
         "GPU", "Motherboard", "PC Case", "CPU Component"
     }
     
-    # Categories with medium risks (general electronics)
     medium_risk_categories = {
         "Printer", "Speaker", "Router", "Solar Panel", "DVD Player",
         "Radio", "Microphone", "Harddisk", "Stick Ps"
     }
     
-    # Categories with lower risks (peripherals, small devices)
     low_risk_categories = {
         "Keyboard", "Mouse", "Charger", "Electronic Socket", "Cables",
         "Calculator", "Clock", "Walkie Talkie", "Body Weight Scale", "Remote"
     }
     
-    # Categories with minimal risks (simple devices)
     minimal_risk_categories = {
         "Fan", "Lamp", "Flashlight"
     }
     
-    # Determine base risk level based on YOLO category
     if category in high_risk_categories:
         base_risk = 5
     elif category in medium_high_risk_categories:
@@ -176,19 +188,14 @@ def calculate_risk_level(category: str, confidence: float) -> int:
     elif category in minimal_risk_categories:
         base_risk = 1
     else:
-        # Unknown YOLO category - assign medium risk
         logger.warning(f"Unknown YOLO category for risk calculation: {category}")
         base_risk = 3
     
-    # Adjust based on confidence level
     if confidence < LOW_CONFIDENCE_THRESHOLD:
-        # Low confidence increases risk (uncertainty is risky)
         base_risk = min(5, base_risk + 1)
     elif confidence > 0.9:
-        # Very high confidence slightly reduces risk
         base_risk = max(1, base_risk - 1)
     
-    # Scale to 1-10 range (multiply by 2)
     scaled_risk = base_risk * 2
     return min(10, max(1, scaled_risk))
 

@@ -31,7 +31,7 @@ from src.models.price_predictor import PricePredictor
 from src.services.gemini_service import GeminiService
 from src.utils.helpers import (
     generate_unique_id, calculate_risk_level, create_fallback_prediction,
-    safe_execute, log_execution_time
+    safe_execute, log_execution_time, damage_level_to_condition
 )
 from src.utils.mappings import get_mapped_category, is_valid_price_category
 
@@ -331,11 +331,13 @@ class DetectionService:
                 validated_yolo_category = yolo_category
                 detection_source = "YOLO (small crop)"
                 price_category = get_mapped_category(validated_yolo_category)
+                condition = "Baik"  # Default condition for fallback
                 price = safe_execute(
                     self.price_predictor.predict_price,
                     None,
-                    f"Price prediction failed for {price_category}",
-                    price_category
+                    f"Price prediction failed for {price_category} ({condition})",
+                    price_category,
+                    condition
                 )
                 return create_fallback_prediction(
                     yolo_category, yolo_confidence, det.bbox, price, detection_source
@@ -421,12 +423,16 @@ class DetectionService:
             price_category = get_mapped_category(validated_yolo_category)
             logger.info(f"YOLO→Price mapping: '{validated_yolo_category}' → '{price_category}'")
 
-            # Step 5: Price Prediction
+            # Step 5: Price Prediction with condition based on damage level
+            condition = damage_level_to_condition(damage_level)
+            logger.info(f"Damage level {damage_level} mapped to condition: {condition}")
+            
             price = safe_execute(
                 self.price_predictor.predict_price,
                 None,
-                f"Price prediction failed for {price_category}",
-                price_category
+                f"Price prediction failed for {price_category} ({condition})",
+                price_category,
+                condition
             )
 
             # Calculate risk level based on final categories
@@ -471,11 +477,13 @@ class DetectionService:
         except Exception as e:
             logger.error(f"Error processing detection {yolo_category}: {str(e)}")
             price_category = get_mapped_category(yolo_category)
+            condition = "Baik"  # Default condition for error fallback
             price = safe_execute(
                 self.price_predictor.predict_price,
                 None,
-                f"Fallback price prediction failed for {price_category}",
-                price_category
+                f"Fallback price prediction failed for {price_category} ({condition})",
+                price_category,
+                condition
             )
             return create_fallback_prediction(
                 yolo_category, yolo_confidence, det.bbox, price, "YOLO (error fallback)"
@@ -583,12 +591,13 @@ class DetectionService:
         finally:
             os.remove(tmp_path)
     
-    def predict_price_only(self, category: str) -> Optional[PriceResponse]:
+    def predict_price_only(self, category: str, condition: str = "Baik") -> Optional[PriceResponse]:
         """
-        Price prediction only - expects price model categories
+        Price prediction only - expects price model categories with condition
         
         Args:
             category: Price model category name (33 categories)
+            condition: Item condition ("Baik", "Biasa", "Buruk")
             
         Returns:
             PriceResponse or None if failed
@@ -599,7 +608,7 @@ class DetectionService:
         if not self.price_predictor.is_category_supported(category):
             return None
         
-        price = self.price_predictor.predict_price(category)
+        price = self.price_predictor.predict_price(category, condition)
         if price is not None:
             return PriceResponse(category=category, price=price)
         return None

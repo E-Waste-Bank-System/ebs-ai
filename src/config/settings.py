@@ -24,37 +24,37 @@ PROJECT_ROOT = str(Path(__file__).parent.parent.parent)
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 
 # Model paths
-YOLO_MODEL_PATH = os.environ.get('MODEL_PATH', os.path.join(MODELS_DIR, "best.pt"))           # YOLO model for 37 categories
-REG_MODEL_PATH = os.environ.get('REG_MODEL_PATH', os.path.join(MODELS_DIR, "regresih.joblib"))  # Price prediction for 33 categories
+YOLO_MODEL_PATH = os.environ.get('MODEL_PATH', os.path.join(MODELS_DIR, "best.pt"))
+REG_MODEL_PATH = os.environ.get('REG_MODEL_PATH', os.path.join(MODELS_DIR, "regresih.joblib"))
 
 # API Configuration
 API_TITLE = "E-Waste Detection API"
 API_DESCRIPTION = "Production API for e-waste detection with YOLO, Gemini validation, and pricing"
-API_VERSION = "3.1.0"  # Updated version to reflect pipeline improvements
+API_VERSION = "3.1.0"
 HOST = "0.0.0.0"
 PORT = 8080
 
 # Detection thresholds
-LOW_CONFIDENCE_THRESHOLD = 0.5    # Minimum confidence for processing detections
-MEDIUM_CONFIDENCE_THRESHOLD = 0.7  # Threshold for high-confidence processing
+LOW_CONFIDENCE_THRESHOLD = 0.5
+MEDIUM_CONFIDENCE_THRESHOLD = 0.7
 
 # Gemini AI Configuration
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash'
 
-# Gemini generation settings (optimized for speed and accuracy)
-GEMINI_MAX_TOKENS = 2048          # Maximum tokens for responses
-GEMINI_TEMPERATURE = 0.0          # Lowered for deterministic results
-GEMINI_TOP_P = 0.8               # Focus on high-probability responses
+# Gemini generation settings
+GEMINI_MAX_TOKENS = 2048
+GEMINI_TEMPERATURE = 0.0
+GEMINI_TOP_P = 0.8
 
-# Gemini performance settings (optimized for production)
+# Gemini performance settings
 GEMINI_MAX_WORKERS = 8
 GEMINI_TIMEOUT = 12.0
 GEMINI_REQUEST_TIMEOUT =10.0
 GEMINI_MAX_CONCURRENT_REQUESTS = 4
 GEMINI_BATCH_SIZE = 3
 
-GEMINI_ENABLE_CROSS_VALIDATION = True  # Force cross-validation always on
+GEMINI_ENABLE_CROSS_VALIDATION = True
 
 # Feature availability flags and initialization
 try:
@@ -89,7 +89,7 @@ PIPELINE_CONFIG = {
 
 logger.info(f"Pipeline configuration: {PIPELINE_CONFIG}")
 
-# Log model paths and envs for debugging
+# Log model paths for debugging
 logger.info(f"YOLO_MODEL_PATH: {YOLO_MODEL_PATH}, exists: {os.path.exists(YOLO_MODEL_PATH)}")
 logger.info(f"REG_MODEL_PATH: {REG_MODEL_PATH}, exists: {os.path.exists(REG_MODEL_PATH)}")
 logger.info(f"GEMINI_API_KEY: {'set' if GEMINI_API_KEY else 'not set'}")

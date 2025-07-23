@@ -7,6 +7,7 @@ Pipeline Flow: YOLO Detection → Gemini Validation → YOLO-to-Price Mapping �
 """
 
 import sys
+import uvicorn
 from pathlib import Path
 
 # Add project root to Python path
@@ -124,22 +125,38 @@ async def detect_objects(file: UploadFile = File(..., description="Image file fo
     summary="Price prediction only",
     tags=["Price Prediction"]
 )
-async def predict_price(category: str):
+async def predict_price(category: str, condition: str = "Baik"):
     """
-    Price prediction only - given a **price model category**, return estimated price
+    Price prediction only - given a **price model category** and condition, return estimated price
     
     **Important:** Uses the 33 price model categories, not YOLO categories
     
+    **Parameters:**
+    - **category**: Price model category (33 categories)
+    - **condition**: Item condition - "Baik" (good), "Biasa" (average), "Buruk" (poor)
+    
     **Examples:**
-    - "Handphone" (not "Phone")
-    - "Laptop" 
-    - "Baterai Laptop" (not "Battery")
-    - "Adaptor /Kilo" (not "Charger")
+    - category="Handphone", condition="Baik" (not "Phone")
+    - category="Laptop", condition="Biasa"
+    - category="Baterai Laptop", condition="Buruk" (not "Battery")
+    - category="Adaptor /Kilo", condition="Baik" (not "Charger")
     
     Use `/categories` endpoint to get the full list of supported price categories.
     """
     if not detection_service:
         raise HTTPException(status_code=503, detail="Detection service not initialized")
+    
+    # Validate condition
+    valid_conditions = ["Baik", "Biasa", "Buruk"]
+    if condition not in valid_conditions:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid condition: {condition}",
+                "valid_conditions": valid_conditions,
+                "note": "Condition must be one of: Baik (good), Biasa (average), Buruk (poor)"
+            }
+        )
     
     # Validate category
     supported_categories = detection_service.get_supported_categories()
@@ -154,7 +171,7 @@ async def predict_price(category: str):
             }
         )
     
-    result = detection_service.predict_price_only(category)
+    result = detection_service.predict_price_only(category, condition)
     if result is None:
         raise HTTPException(status_code=500, detail="Price prediction failed")
     

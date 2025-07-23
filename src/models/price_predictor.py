@@ -2,7 +2,19 @@
 Price Prediction Module
 Handles K-Nearest Neighbors regression model for price prediction - Final stage of the pipeline
 
-Pipeline: YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
+Pipeline: YOLO Detection → Gemini Validation →        base_price = fallback_prices.get(price_category, 5000)
+        
+        condition_multipliers = {
+            "Baik": 1.0,
+            "Biasa": 0.7,
+            "Buruk": 0.4
+        }
+        
+        multiplier = condition_multipliers.get(condition, 1.0)
+        adjusted_price = int(base_price * multiplier)
+        
+        logger.info(f"Fallback price for {price_category} ({condition}): {adjusted_price} IDR (base: {base_price}, multiplier: {multiplier})")
+        return adjusted_priceapping → Price Prediction
 This module handles stage 4: Predicts prices using 33 price model categories
 """
 
@@ -11,7 +23,6 @@ import logging
 import sys
 from typing import List, Optional
 import joblib
-from joblib import load
 import pandas as pd
 
 from src.models.regresih import Regresih
@@ -23,14 +34,7 @@ sys.modules['__main__'].Regresih = Regresih
 
 
 class PricePredictor:
-    """
-    K-Nearest Neighbors Price Prediction Manager
-    
-    Responsible for the final stage of the pipeline:
-    - Loads KNR model and encoder for 33 price categories
-    - Predicts prices for mapped categories from YOLO→Price mapping
-    - Provides fallback prices when ML models unavailable
-    """
+    """K-Nearest Neighbors Price Prediction Manager"""
     
     def __init__(self):
         self.model = None
@@ -45,19 +49,12 @@ class PricePredictor:
             True if models loaded successfully, False otherwise
         """
         try:
-            # Check if model files exist
             if not os.path.exists(REG_MODEL_PATH):
                 logger.error(f"KNR model file not found: {REG_MODEL_PATH}")
                 return False
-                
-            # if not os.path.exists(ENCODER_PATH):
-            #     logger.error(f"Encoder file not found: {ENCODER_PATH}")
-            #     return False
             
             logger.info(f"Loading KNR model from: {REG_MODEL_PATH}")
-            # logger.info(f"Loading encoder from: {ENCODER_PATH}")
             
-            # Load the models with better error handling
             try:
                 self.model = joblib.load(REG_MODEL_PATH)
                 logger.info("KNR price prediction model loaded successfully")
@@ -66,34 +63,24 @@ class PricePredictor:
                 logger.error(f"Model error type: {type(model_error).__name__}")
                 return False
             
-            # try:
-            #     self.encoder = joblib.load(ENCODER_PATH)
-            #     logger.info("Price category encoder loaded successfully")
-            # except Exception as encoder_error:
-            #     logger.error(f"Failed to load encoder: {str(encoder_error)}")
-            #     logger.error(f"Encoder error type: {type(encoder_error).__name__}")
-            #     return False
-            
-            # Test the models with a sample prediction
             try:
-                test_categories = list(PRICE_CATEGORIES)[:3]  # Test with first 3 categories
+                test_categories = list(PRICE_CATEGORIES)[:3]
                 for test_cat in test_categories:
                     test_df = pd.DataFrame({
                         "Nama Item": [test_cat],
                         "Kondisi": ["Baik"]
                     })
                     test_prediction = self.model.predict(test_df)
-                    # Convert prediction to integer for consistent logging
                     if test_prediction is not None and len(test_prediction) > 0:
                         test_price = int(test_prediction[0]) if hasattr(test_prediction, '__getitem__') else int(test_prediction)
-                        logger.info(f"Test price prediction for {test_cat}: {test_price} IDR")
+                        logger.info(f"Test price prediction for {test_cat} (Baik): {test_price} IDR")
                     else:
-                        logger.error(f"Test prediction returned None or empty for {test_cat}")
+                        logger.error(f"Test prediction returned None for {test_cat}")
                         return False
-                    break  # Only test one to verify it works
+                    break
                     
                 self.is_loaded = True
-                logger.info("Price prediction model and encoder loaded and tested successfully")
+                logger.info("Price prediction model loaded and tested successfully")
                 logger.info(f"Model supports {len(PRICE_CATEGORIES)} price categories")
                 return True
                 
@@ -115,84 +102,55 @@ class PricePredictor:
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
     
-    def predict_price(self, price_category: str) -> Optional[int]:
+    def predict_price(self, price_category: str, condition: str = "Baik") -> Optional[int]:
         """
-        Predict price for given price model category (after YOLO→Price mapping)
+        Predict price for given price model category with condition (after YOLO→Price mapping)
         
         Args:
             price_category: Price model category name (must be from 33 price categories)
+            condition: Item condition - one of ["Baik", "Biasa", "Buruk"] (default: "Baik")
             
         Returns:
             Predicted price in IDR or None if failed
         """
-        # Validate that this is a price category, not a YOLO category
         if not is_valid_price_category(price_category):
             logger.error(f"Invalid price category: {price_category}")
             logger.error("Expected price model category (33 classes), not YOLO category (37 classes)")
             return None
         
+        valid_conditions = ["Baik", "Biasa", "Buruk"]
+        if condition not in valid_conditions:
+            logger.warning(f"Invalid condition '{condition}', using 'Baik' instead")
+            condition = "Baik"
+        
         if not self.is_loaded:
             logger.warning("Price prediction model not loaded, using fallback prices")
-            return self._get_fallback_price(price_category)
+            return self._get_fallback_price(price_category, condition)
         
         try:
-            # Try different column names that might be expected by the model
             df = pd.DataFrame({
                 "Nama Item": [price_category],
-                "Kondisi": ["Baik"]
+                "Kondisi": [condition]
             })
             
-            print(type(self.model))
+            logger.info(f"Predicting price for: {price_category} with condition: {condition}")
             prediction = self.model.predict(df)
             
-            # Convert prediction to integer (prediction is usually a numpy array)
             if prediction is not None and len(prediction) > 0:
                 price = int(prediction[0]) if hasattr(prediction, '__getitem__') else int(prediction)
-                logger.info(f"ML price prediction for {price_category}: {price} IDR")
+                logger.info(f"ML price prediction for {price_category} ({condition}): {price} IDR")
                 return price
             else:
-                logger.error(f"Model returned None or empty prediction for {price_category}")
-                return self._get_fallback_price(price_category)
+                logger.error(f"Model returned None or empty prediction for {price_category} ({condition})")
+                return self._get_fallback_price(price_category, condition)
             
-        except KeyError:
-            # Fallback to 'name' if 'Nama Item' doesn't work
-            try:
-                df = pd.DataFrame({
-                    "name": [price_category],
-                    "Kondisi": ["Baik"]
-                })
-                prediction = self.model.predict(df)
-                
-                # Convert prediction to integer (prediction is usually a numpy array)
-                if prediction is not None and len(prediction) > 0:
-                    price = int(prediction[0]) if hasattr(prediction, '__getitem__') else int(prediction)
-                    logger.info(f"ML price prediction for {price_category}: {price} IDR (fallback column)")
-                    return price
-                else:
-                    logger.error(f"Model returned None or empty prediction for {price_category} (fallback column)")
-                    return self._get_fallback_price(price_category)
-                
-            except Exception as e:
-                logger.error(f"Price prediction failed with both column names: {str(e)}")
-                logger.warning("Using fallback price due to prediction failure")
-                return self._get_fallback_price(price_category)
         except Exception as e:
-            logger.error(f"Price prediction error: {str(e)}")
+            logger.error(f"Price prediction error for {price_category} ({condition}): {str(e)}")
             logger.warning("Using fallback price due to prediction error")
-            return self._get_fallback_price(price_category)
+            return self._get_fallback_price(price_category, condition)
     
-    def _get_fallback_price(self, price_category: str) -> int:
-        """
-        Get fallback price when ML models are not available
-        
-        Args:
-            price_category: Price model category name
-            
-        Returns:
-            Fallback price in IDR
-        """
-        # Fallback prices based on typical e-waste values in IDR
-        # These prices are for the 33 price model categories
+    def _get_fallback_price(self, price_category: str, condition: str = "Baik") -> int:
+        """Get fallback price when ML models are not available"""
         fallback_prices = {
             "Handphone": 8000,
             "Laptop": 25000,
@@ -225,9 +183,20 @@ class PricePredictor:
             "Remot": 1500
         }
         
-        price = fallback_prices.get(price_category, 5000)  # Default 5000 IDR
-        logger.info(f"Fallback price for {price_category}: {price} IDR")
-        return price
+        base_price = fallback_prices.get(price_category, 5000)  # Default 5000 IDR
+        
+        # Adjust price based on condition
+        condition_multipliers = {
+            "Baik": 1.0,      # Good condition - full price
+            "Biasa": 0.7,     # Average condition - 70% of price  
+            "Buruk": 0.4      # Poor condition - 40% of price
+        }
+        
+        multiplier = condition_multipliers.get(condition, 1.0)
+        adjusted_price = int(base_price * multiplier)
+        
+        logger.info(f"Fallback price for {price_category} ({condition}): {adjusted_price} IDR (base: {base_price}, multiplier: {multiplier})")
+        return adjusted_price
     
     def get_supported_categories(self) -> List[str]:
         """Get list of supported price categories (33 categories)"""
@@ -238,12 +207,7 @@ class PricePredictor:
         return is_valid_price_category(price_category)
     
     def get_model_info(self) -> dict:
-        """
-        Get information about the loaded price prediction model
-        
-        Returns:
-            Dictionary with model information
-        """
+        """Get information about the loaded price prediction model"""
         return {
             "model_loaded": self.is_loaded,
             "model_path": REG_MODEL_PATH if self.is_loaded else None,
