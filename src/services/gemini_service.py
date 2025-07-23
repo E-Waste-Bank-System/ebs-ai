@@ -446,6 +446,103 @@ JSON only:
             logger.error(f"Damage analysis error: {str(e)}")
             return 5, f"Damage analysis error: {str(e)}"
     
+    async def analyze_condition_directly(self, image_path: str, category: str, extra_image_path: str = None, prompt_context: dict = None) -> str:
+        """
+        Directly analyze item condition using Gemini vision for price prediction fallback.
+        
+        Args:
+            image_path: Path to cropped detection image
+            category: Final category name
+            extra_image_path: Optional additional image for context
+            prompt_context: Optional context information
+            
+        Returns:
+            Condition string: "Baik", "Biasa", or "Buruk"
+        """
+        if not self.is_available or self.model is None:
+            logger.warning("Gemini not available for condition analysis, defaulting to 'Baik'")
+            return "Baik"
+        
+        try:
+            images = [Image.open(image_path)]
+            if extra_image_path:
+                images.append(Image.open(extra_image_path))
+            
+            # Optimized prompt for direct condition assessment
+            prompt = f"""Analyze the condition of this {category} e-waste item and classify it into one of these exact categories:
+
+CONDITION CATEGORIES:
+- "Baik": Minimal wear, functional appearance, minor scratches only
+- "Biasa": Moderate wear, some damage but still recognizable, medium scratches/dents  
+- "Buruk": Heavy damage, broken parts, severe wear, cracked/missing components
+
+Look for:
+- Physical damage (cracks, breaks, missing parts)
+- Surface condition (scratches, dents, discoloration)
+- Overall structural integrity
+- Visible wear and tear
+
+JSON format only:
+{{"condition": "Baik/Biasa/Buruk", "reasoning": "brief analysis of visible damage"}}"""
+            
+            logger.info(f"[Gemini] Analyzing condition for {category}")
+            
+            response = await self._call_gemini_with_timeout(prompt, images)
+            logger.info(f"[Gemini] Condition analysis response: {response}")
+            
+            if not response:
+                logger.warning("Empty response from Gemini condition analysis, defaulting to 'Baik'")
+                return "Baik"
+            
+            # Parse response with robust JSON extraction
+            try:
+                # Clean and extract JSON
+                cleaned_text = response.strip()
+                start_idx = cleaned_text.find('{')
+                end_idx = cleaned_text.rfind('}')
+                
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    cleaned_text = cleaned_text[start_idx:end_idx + 1]
+                else:
+                    # Try to extract from markdown blocks
+                    if '```json' in cleaned_text:
+                        start = cleaned_text.find('```json') + 7
+                        end = cleaned_text.find('```', start)
+                        if end != -1:
+                            cleaned_text = cleaned_text[start:end].strip()
+                    elif '```' in cleaned_text:
+                        start = cleaned_text.find('```') + 3
+                        end = cleaned_text.find('```', start)
+                        if end != -1:
+                            cleaned_text = cleaned_text[start:end].strip()
+                
+                if not cleaned_text:
+                    logger.warning("No valid JSON found in condition analysis response, defaulting to 'Baik'")
+                    return "Baik"
+                
+                result = json.loads(cleaned_text)
+                condition = result.get("condition", "Baik")
+                
+                # Validate condition is one of the allowed values
+                valid_conditions = ["Baik", "Biasa", "Buruk"]
+                if condition not in valid_conditions:
+                    logger.warning(f"Invalid condition '{condition}' from Gemini, defaulting to 'Baik'")
+                    return "Baik"
+                
+                reasoning = result.get("reasoning", "No analysis provided")
+                logger.info(f"Condition analysis result: {condition} - {reasoning}")
+                
+                return condition
+                
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                logger.error(f"Failed to parse condition analysis response: {e}")
+                logger.debug(f"Raw response: {response[:200]}...")
+                return "Baik"
+                
+        except Exception as e:
+            logger.error(f"Condition analysis error: {str(e)}")
+            return "Baik"
+    
     def _create_yolo_validation_prompt(self, yolo_prediction: str, yolo_confidence: float, prompt_context: dict = None) -> str:
         """
         Create optimized validation prompt for YOLO category validation.

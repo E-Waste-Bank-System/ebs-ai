@@ -56,7 +56,37 @@ def safe_execute(func: Callable[..., T], default_value: T, error_msg: str = "", 
         Function result or default_value if failed
     """
     try:
-        return func(*args, **kwargs)
+        result = func(*args, **kwargs)
+        # If it's a coroutine, we need to handle it properly
+        if asyncio.iscoroutine(result):
+            logger.warning("safe_execute called with async function - use async safe_execute instead")
+            # For backward compatibility, we'll handle it but log a warning
+            return result
+        return result
+    except Exception as e:
+        full_msg = f"{error_msg}: {str(e)}" if error_msg else f"Function {func.__name__} failed: {str(e)}"
+        logger.error(full_msg)
+        return default_value
+
+
+async def async_safe_execute(func: Callable[..., T], default_value: T, error_msg: str = "", *args, **kwargs) -> T:
+    """
+    Safely execute an async function with error handling and default fallback
+    
+    Args:
+        func: Async function to execute
+        default_value: Value to return if function fails
+        error_msg: Custom error message prefix
+        *args, **kwargs: Arguments to pass to the function
+        
+    Returns:
+        Function result or default_value if failed
+    """
+    try:
+        if asyncio.iscoroutinefunction(func):
+            return await func(*args, **kwargs)
+        else:
+            return func(*args, **kwargs)
     except Exception as e:
         full_msg = f"{error_msg}: {str(e)}" if error_msg else f"Function {func.__name__} failed: {str(e)}"
         logger.error(full_msg)

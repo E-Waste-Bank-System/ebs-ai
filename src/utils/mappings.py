@@ -1,4 +1,8 @@
 # YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # YOLO class names (37 classes, indices 0-36)
 CLASS_NAMES = {

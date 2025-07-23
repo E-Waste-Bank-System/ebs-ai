@@ -31,7 +31,7 @@ from src.models.price_predictor import PricePredictor
 from src.services.gemini_service import GeminiService
 from src.utils.helpers import (
     generate_unique_id, calculate_risk_level, create_fallback_prediction,
-    safe_execute, log_execution_time, damage_level_to_condition
+    safe_execute, async_safe_execute, log_execution_time, damage_level_to_condition
 )
 from src.utils.mappings import get_mapped_category, is_valid_price_category
 
@@ -426,6 +426,27 @@ class DetectionService:
             # Step 5: Price Prediction with condition based on damage level
             condition = damage_level_to_condition(damage_level)
             logger.info(f"Damage level {damage_level} mapped to condition: {condition}")
+            
+            # Fallback: If condition is invalid or damage level is None, use Gemini to directly analyze condition
+            valid_conditions = ["Baik", "Biasa", "Buruk"]
+            if condition not in valid_conditions or damage_level is None:
+                logger.warning(f"Invalid condition '{condition}' or missing damage level ({damage_level}). Using Gemini fallback for condition analysis.")
+                
+                # Use Gemini to directly analyze condition from cropped image
+                fallback_condition = await async_safe_execute(
+                    self.gemini_service.analyze_condition_directly,
+                    "Baik",  # Default fallback
+                    f"Gemini condition analysis fallback failed for {validated_yolo_category}",
+                    cropped_path, validated_yolo_category, None, prompt_context
+                )
+                
+                # Double-check that the fallback condition is valid
+                if fallback_condition in valid_conditions:
+                    condition = fallback_condition
+                    logger.info(f"Gemini fallback condition analysis result: {condition}")
+                else:
+                    logger.warning(f"Gemini returned invalid condition '{fallback_condition}', using 'Baik' as final fallback")
+                    condition = "Baik"
             
             price = safe_execute(
                 self.price_predictor.predict_price,
