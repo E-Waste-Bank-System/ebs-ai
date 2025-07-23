@@ -133,7 +133,7 @@ jobs:
           env_vars: |
             ENABLE_GCS=true
             GCS_BUCKET=ebs-storage
-            MODEL_PATH=models/best.pt
+            MODEL_PATH=models/detectv4.pt
             GEMINI_API_KEY=AIzaSyBI-WX9MQaiWyMwmwHoZS48gNu0e9Pu6P0
             REG_MODEL_PATH=models/regresih.joblib
 

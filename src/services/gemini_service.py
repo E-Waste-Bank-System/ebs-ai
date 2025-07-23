@@ -471,19 +471,19 @@ JSON only:
             # Optimized prompt for direct condition assessment
             prompt = f"""Analyze the condition of this {category} e-waste item and classify it into one of these exact categories:
 
-CONDITION CATEGORIES:
-- "Baik": Minimal wear, functional appearance, minor scratches only
-- "Biasa": Moderate wear, some damage but still recognizable, medium scratches/dents  
-- "Buruk": Heavy damage, broken parts, severe wear, cracked/missing components
+            CONDITION CATEGORIES:
+            - "Baik": Minimal wear, functional appearance, minor scratches only
+            - "Biasa": Moderate wear, some damage but still recognizable, medium scratches/dents  
+            - "Buruk": Heavy damage, broken parts, severe wear, cracked/missing components
 
-Look for:
-- Physical damage (cracks, breaks, missing parts)
-- Surface condition (scratches, dents, discoloration)
-- Overall structural integrity
-- Visible wear and tear
+            Look for:
+            - Physical damage (cracks, breaks, missing parts)
+            - Surface condition (scratches, dents, discoloration)
+            - Overall structural integrity
+            - Visible wear and tear
 
-JSON format only:
-{{"condition": "Baik/Biasa/Buruk", "reasoning": "brief analysis of visible damage"}}"""
+            JSON format only:
+            {{"condition": "Baik/Biasa/Buruk"}}"""
             
             logger.info(f"[Gemini] Analyzing condition for {category}")
             
