@@ -20,7 +20,9 @@ from PIL import Image
 
 from src.config.settings import (
     YOLO_AVAILABLE, YOLO_MODEL_PATH, LOW_CONFIDENCE_THRESHOLD,
-    MEDIUM_CONFIDENCE_THRESHOLD, GEMINI_TIMEOUT, GEMINI_ENABLE_CROSS_VALIDATION
+    MEDIUM_CONFIDENCE_THRESHOLD, GEMINI_TIMEOUT, GEMINI_ENABLE_CROSS_VALIDATION,
+    GEMINI_ENABLE_FAST_MODE, GEMINI_SKIP_VALIDATION_FOR_HIGH_CONFIDENCE,
+    GEMINI_USE_SINGLE_COMPREHENSIVE_CALL
 )
 from src.models.response_models import (
     Detection, FullPrediction, FullResponse,
@@ -320,16 +322,139 @@ class DetectionService:
         """
         Process a single detection through the complete pipeline:
         YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction
+        
+        OPTIMIZED for speed with fast-mode processing
         """
         yolo_category = det.category
         yolo_confidence = det.confidence
         logger.info(f"Processing YOLO detection: '{yolo_category}' (confidence: {yolo_confidence:.3f})")
+        
+        # Fast mode optimizations
+        if GEMINI_ENABLE_FAST_MODE and GEMINI_SKIP_VALIDATION_FOR_HIGH_CONFIDENCE and yolo_confidence > 0.8:
+            logger.info(f"High confidence detection ({yolo_confidence:.3f}) - skipping Gemini validation for speed")
+            return await self._process_fast_mode(det, image_path, all_detections)
+        
+        return await self._process_standard_mode(det, image_path, all_detections)
+    
+    async def _process_fast_mode(
+        self, 
+        det: Detection, 
+        image_path: str, 
+        all_detections: List[Detection]
+    ) -> Optional[FullPrediction]:
+        """Fast processing for high-confidence detections - still use Gemini but optimized"""
+        yolo_category = det.category
+        yolo_confidence = det.confidence
+        
+        # Even in fast mode, we want the full Gemini analysis for quality
+        # but we skip some expensive operations like cross-validation
+        cropped_path = self._save_cropped_bbox(image_path, det.bbox, yolo_category)
+        
+        try:
+            if GEMINI_USE_SINGLE_COMPREHENSIVE_CALL and self.gemini_service.is_service_available():
+                # Use the comprehensive single call even in fast mode
+                prompt_context = {
+                    "all_detections": [
+                        {"category": d.category, "confidence": d.confidence, "bbox": d.bbox} 
+                        for d in all_detections
+                    ],
+                    "focus_bbox": det.bbox,
+                    "focus_label": yolo_category
+                }
+                
+                batch_result = await async_safe_execute(
+                    self.gemini_service.process_comprehensive_single_call,
+                    self._get_default_batch_result(yolo_category),
+                    f"Fast mode comprehensive analysis failed for {yolo_category}",
+                    cropped_path,
+                    yolo_category,
+                    yolo_prediction=yolo_category,
+                    yolo_confidence=yolo_confidence,
+                    prompt_context=prompt_context
+                )
+                
+                validation = batch_result.get("validation")
+                description = batch_result.get("description", f"Perangkat {yolo_category.lower()} dalam kondisi baik")
+                suggestions = batch_result.get("suggestions", [
+                    "Periksa kondisi perangkat secara visual",
+                    "Pisahkan komponen yang dapat didaur ulang", 
+                    "Bawa ke pusat daur ulang e-waste terdekat"
+                ])
+                damage_level = batch_result.get("damage_level", 2)
+                risk_level = batch_result.get("risk_level") or calculate_risk_level(yolo_category, yolo_confidence)
+                
+                # Determine validated category
+                validated_yolo_category, detection_source = self._determine_validated_yolo_category(
+                    validation, yolo_category, description
+                )
+                
+                # Simplify detection source to only two values
+                if detection_source in ["Gemini Corrected", "Cross-validated", "Rejected"]:
+                    detection_source = "Gemini Interfered"
+                else:
+                    detection_source = "YOLO"
+                
+            else:
+                # Fallback to basic processing if Gemini unavailable
+                validated_yolo_category = yolo_category
+                detection_source = "YOLO (fast mode - no Gemini)"
+                description = f"Perangkat {yolo_category.lower()} terdeteksi dalam kondisi baik"
+                suggestions = [
+                    "Periksa kondisi perangkat secara visual",
+                    "Pisahkan komponen yang dapat didaur ulang", 
+                    "Bawa ke pusat daur ulang e-waste terdekat"
+                ]
+                damage_level = 2  # Default good condition
+                risk_level = calculate_risk_level(yolo_category, yolo_confidence)
+        
+        finally:
+            # Cleanup cropped image
+            if cropped_path and os.path.exists(cropped_path):
+                os.remove(cropped_path)
+        
+        # Step 4: YOLO-to-Price Mapping
+        price_category = get_mapped_category(validated_yolo_category)
+        logger.info(f"Fast mode YOLO→Price mapping: '{validated_yolo_category}' → '{price_category}'")
+        
+        # Step 5: Price Prediction with condition based on damage level
+        condition = damage_level_to_condition(damage_level)
+        price = safe_execute(
+            self.price_predictor.predict_price,
+            None,
+            f"Price prediction failed for {price_category} ({condition})",
+            price_category,
+            condition
+        )
+        
+        # Create fast prediction with full Gemini content
+        return FullPrediction(
+            id=generate_unique_id(),
+            category=validated_yolo_category,
+            confidence=yolo_confidence,
+            regression_result=price,
+            description=description,
+            bbox=det.bbox,
+            suggestion=suggestions,
+            risk_lvl=risk_level,
+            damage_level=damage_level,
+            detection_source=detection_source
+        )
+    
+    async def _process_standard_mode(
+        self, 
+        det: Detection, 
+        image_path: str, 
+        all_detections: List[Detection]
+    ) -> Optional[FullPrediction]:
+        """Standard processing with Gemini validation - for lower confidence detections"""
+        yolo_category = det.category
+        yolo_confidence = det.confidence
         cropped_path = self._save_cropped_bbox(image_path, det.bbox, yolo_category)
         try:
             if not self._is_valid_crop(cropped_path):
                 logger.warning(f"Small crop for {yolo_category}, using fallback processing")
                 validated_yolo_category = yolo_category
-                detection_source = "YOLO (small crop)"
+                detection_source = "YOLO"  # Simplified detection source
                 price_category = get_mapped_category(validated_yolo_category)
                 condition = "Baik"  # Default condition for fallback
                 price = safe_execute(
@@ -352,18 +477,45 @@ class DetectionService:
                 "focus_label": yolo_category
             }
 
-            # Step 2: Gemini Validation (validates YOLO categories)
-            batch_result = await safe_execute(
-                self.gemini_service.process_batch_analysis,
-                self._get_default_batch_result(yolo_category),
-                f"Gemini batch analysis failed for {yolo_category}",
-                cropped_path,
-                yolo_category,  # For content generation (will be replaced below)
-                yolo_prediction=yolo_category,  # For validation
-                yolo_confidence=yolo_confidence,
-                extra_image_path=None,
-                prompt_context=prompt_context
-            )
+            # Step 2: Optimized Gemini Processing
+            if GEMINI_USE_SINGLE_COMPREHENSIVE_CALL:
+                # OPTIMIZED: Single comprehensive call gets all data at once
+                batch_result = await async_safe_execute(
+                    self.gemini_service.process_comprehensive_single_call,
+                    self._get_default_batch_result(yolo_category),
+                    f"Gemini comprehensive analysis failed for {yolo_category}",
+                    cropped_path,
+                    yolo_category,
+                    yolo_prediction=yolo_category,
+                    yolo_confidence=yolo_confidence,
+                    prompt_context=prompt_context
+                )
+            elif GEMINI_ENABLE_FAST_MODE:
+                # Fast mode: Only essential operations
+                batch_result = await async_safe_execute(
+                    self.gemini_service.process_essential_analysis,
+                    self._get_default_batch_result(yolo_category),
+                    f"Gemini essential analysis failed for {yolo_category}",
+                    cropped_path,
+                    yolo_category,
+                    yolo_prediction=yolo_category,
+                    yolo_confidence=yolo_confidence,
+                    prompt_context=prompt_context
+                )
+            else:
+                # Standard mode: Full batch analysis (multiple API calls)
+                batch_result = await async_safe_execute(
+                    self.gemini_service.process_batch_analysis,
+                    self._get_default_batch_result(yolo_category),
+                    f"Gemini batch analysis failed for {yolo_category}",
+                    cropped_path,
+                    yolo_category,
+                    yolo_prediction=yolo_category,
+                    yolo_confidence=yolo_confidence,
+                    extra_image_path=None,
+                    prompt_context=prompt_context
+                )
+            
             validation = batch_result.get("validation")
             description = batch_result.get("description", f"Perangkat elektronik {yolo_category.lower()}")
             suggestions = batch_result.get("suggestions", [
@@ -378,8 +530,14 @@ class DetectionService:
                 validation, yolo_category, description
             )
 
-            # --- Always run cross-validation after description generation ---
-            if GEMINI_ENABLE_CROSS_VALIDATION:
+            # Simplify detection source - only two values allowed
+            if detection_source in ["Gemini Corrected", "Cross-validated", "Rejected"]:
+                detection_source = "Gemini Interfered"
+            else:
+                detection_source = "YOLO"
+
+            # --- Conditional cross-validation (only if enabled and not in fast mode) ---
+            if GEMINI_ENABLE_CROSS_VALIDATION and not GEMINI_ENABLE_FAST_MODE:
                 cross_validated_category = await safe_execute(
                     self.gemini_service.cross_validate_category,
                     validated_yolo_category,
@@ -389,7 +547,7 @@ class DetectionService:
                 if cross_validated_category != validated_yolo_category:
                     logger.info(f"Cross-validation corrected: '{validated_yolo_category}' → '{cross_validated_category}'")
                     validated_yolo_category = cross_validated_category
-                    detection_source = "Cross-validated"
+                    detection_source = "Gemini Interfered"  # Simplified to Gemini Interfered
                     # Regenerate content with new category
                     description = await safe_execute(
                         self.gemini_service.generate_description,
@@ -456,8 +614,8 @@ class DetectionService:
                 condition
             )
 
-            # Calculate risk level based on final categories
-            risk_level = calculate_risk_level(validated_yolo_category, yolo_confidence)
+            # Use Gemini-provided risk level if available, otherwise calculate based on category
+            risk_level = batch_result.get("risk_level") or calculate_risk_level(validated_yolo_category, yolo_confidence)
 
             # --- Post-processing consistency check ---
             # If description or suggestions do not mention the validated category, regenerate them
@@ -507,7 +665,7 @@ class DetectionService:
                 condition
             )
             return create_fallback_prediction(
-                yolo_category, yolo_confidence, det.bbox, price, "YOLO (error fallback)"
+                yolo_category, yolo_confidence, det.bbox, price, "YOLO"  # Simplified detection source
             )
         finally:
             if cropped_path and os.path.exists(cropped_path):
@@ -539,6 +697,7 @@ class DetectionService:
     ) -> Tuple[str, str]:
         """
         Determine the final validated YOLO category and detection source.
+        Only returns 'YOLO' or 'Gemini Interfered' as detection sources.
         
         Args:
             validation: Gemini validation result
@@ -549,16 +708,19 @@ class DetectionService:
             Tuple of (validated_yolo_category, detection_source)
         """
         validated_yolo_category = original_yolo_category
-        detection_source = "YOLO"
+        detection_source = "YOLO"  # Default to YOLO
         
         if validation and validation.is_valid:
             if validation.final_category and validation.final_category != original_yolo_category:
                 validated_yolo_category = validation.final_category
+                detection_source = "Gemini Interfered"  # Gemini corrected the category
                 logger.info(f"Gemini corrected YOLO: '{original_yolo_category}' → '{validated_yolo_category}'")
-            detection_source = validation.detection_source
+            else:
+                # Gemini validated but didn't change category
+                detection_source = "YOLO"
         elif validation and not validation.is_valid:
             logger.warning(f"Gemini rejected detection: {validation.gemini_feedback}")
-            detection_source = "Rejected"
+            detection_source = "Rejected"  # This will be converted to "Gemini Interfered" later
         else:
             # Fallback: Use cross-validation with description if Gemini validation didn't work
             if GEMINI_ENABLE_CROSS_VALIDATION:
@@ -570,7 +732,7 @@ class DetectionService:
                 )
                 if cross_validated_category != validated_yolo_category:
                     validated_yolo_category = cross_validated_category
-                    detection_source = "Cross-validated"
+                    detection_source = "Gemini Interfered"  # Gemini interfered via cross-validation
                     logger.info(f"Cross-validation corrected: '{original_yolo_category}' → '{validated_yolo_category}'")
         
         return validated_yolo_category, detection_source
@@ -650,5 +812,5 @@ class DetectionService:
             "gemini_available": self.gemini_service.is_service_available(),
             "pipeline_flow": "YOLO Detection → Gemini Validation → YOLO-to-Price Mapping → Price Prediction",
             "rejection_handling": "Rejected detections are excluded from results",
-            "validation_types": ["YOLO", "Gemini Corrected", "Cross-validated", "Rejected"]
+            "detection_sources": ["YOLO", "Gemini Interfered"]
         }

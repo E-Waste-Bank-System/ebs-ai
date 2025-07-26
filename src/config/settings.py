@@ -43,18 +43,22 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash'
 
 # Gemini generation settings
-GEMINI_MAX_TOKENS = 2048
+GEMINI_MAX_TOKENS = 1024  # Reduced from 2048 for faster responses
 GEMINI_TEMPERATURE = 0.0
 GEMINI_TOP_P = 0.8
 
-# Gemini performance settings
-GEMINI_MAX_WORKERS = 8
-GEMINI_TIMEOUT = 12.0
-GEMINI_REQUEST_TIMEOUT =10.0
-GEMINI_MAX_CONCURRENT_REQUESTS = 4
-GEMINI_BATCH_SIZE = 3
+# Gemini performance settings - OPTIMIZED FOR SPEED
+GEMINI_MAX_WORKERS = 12
+GEMINI_TIMEOUT = 8.0
+GEMINI_REQUEST_TIMEOUT = 6.0  # Reduced from 10s to 6s
+GEMINI_MAX_CONCURRENT_REQUESTS = 8  # Increased from 4 to 8
+GEMINI_BATCH_SIZE = 5  # Increased from 3 to 5
 
-GEMINI_ENABLE_CROSS_VALIDATION = True
+# Performance optimization flags
+GEMINI_ENABLE_CROSS_VALIDATION = False  # Disabled for speed - biggest time saver
+GEMINI_ENABLE_FAST_MODE = True  # Enable smart optimizations
+GEMINI_SKIP_VALIDATION_FOR_HIGH_CONFIDENCE = True  # Skip validation for confidence > 0.8
+GEMINI_USE_SINGLE_COMPREHENSIVE_CALL = True  # Use one comprehensive prompt instead of multiple calls
 
 # Feature availability flags and initialization
 try:

@@ -17,7 +17,8 @@ from src.config.settings import (
     GEMINI_AVAILABLE, GEMINI_MODEL, GEMINI_MAX_TOKENS, 
     GEMINI_TEMPERATURE, GEMINI_TOP_P, GEMINI_MAX_WORKERS,
     GEMINI_TIMEOUT, GEMINI_REQUEST_TIMEOUT, GEMINI_MAX_CONCURRENT_REQUESTS,
-    GEMINI_BATCH_SIZE, GEMINI_ENABLE_CROSS_VALIDATION
+    GEMINI_BATCH_SIZE, GEMINI_ENABLE_CROSS_VALIDATION, GEMINI_ENABLE_FAST_MODE,
+    GEMINI_USE_SINGLE_COMPREHENSIVE_CALL
 )
 from src.utils.mappings import CLASS_NAMES, get_all_yolo_classes
 from src.models.response_models import ValidationResult
@@ -719,6 +720,285 @@ JSON only:
             except Exception as e:
                 logger.error(f"Gemini call failed: {str(e)}")
                 return ""
+
+    async def process_comprehensive_single_call(
+        self, 
+        image_path: str, 
+        category: str, 
+        yolo_prediction: str = None,
+        yolo_confidence: float = None,
+        prompt_context: dict = None
+    ) -> Dict[str, Any]:
+        """
+        OPTIMIZED: Get ALL analysis results in a single Gemini call for maximum speed
+        - YOLO Validation
+        - Description generation
+        - Suggestions generation  
+        - Damage level assessment
+        
+        This reduces API calls from 4+ separate calls to just 1 call.
+        """
+        if not self.is_available or self.model is None:
+            return {
+                "validation": ValidationResult(
+                    is_valid=True,
+                    final_category=yolo_prediction or category,
+                    detection_source="YOLO",
+                    gemini_feedback="Gemini not available"
+                ),
+                "description": f"Perangkat {category.lower()} terdeteksi dalam kondisi baik",
+                "suggestions": [
+                    "Periksa kondisi perangkat secara visual",
+                    "Pisahkan komponen yang dapat didaur ulang",
+                    "Bawa ke pusat daur ulang e-waste terdekat"
+                ],
+                "damage_level": 2
+            }
+        
+        try:
+            images = [Image.open(image_path)]
+            
+            # Create comprehensive prompt that gets all information at once
+            yolo_classes = ", ".join(get_all_yolo_classes())
+            
+            prompt = f"""Analyze this e-waste image for {yolo_prediction} detection (confidence: {yolo_confidence:.3f}).
+
+Return ONLY this JSON format (no extra text):
+{{
+    "validation": {{
+        "is_valid": true,
+        "final_category": "{yolo_prediction}",
+        "is_corrected": false
+    }},
+    "description": "Indonesian description 10-15 words about condition",
+    "suggestions": [
+        "Saran pertama untuk pembuangan",
+        "Saran kedua untuk penanganan", 
+        "Saran ketiga untuk daur ulang"
+    ],
+    "damage_level": 2,
+    "risk_level": 5
+}}
+
+Instructions:
+1. If image shows {yolo_prediction}, set is_valid=true, final_category="{yolo_prediction}", is_corrected=false
+2. If wrong object, correct final_category to: {yolo_classes[:200]}...
+3. Description: Indonesian, exactly 10-15 words, describe visible condition
+4. Suggestions: 3 practical e-waste disposal tips in Indonesian
+5. Damage level: 1-10 (1=perfect, 10=broken)
+6. Risk level: 1-10 (1=safe, 10=hazardous)
+
+RESPOND WITH VALID JSON ONLY."""
+
+            # Make the single comprehensive call
+            response = await self._call_gemini_with_timeout(prompt, images)
+            
+            if not response or not response.strip():
+                logger.warning("Empty response from comprehensive Gemini call - using fallback")
+                return self._get_default_comprehensive_result(yolo_prediction, category)
+            
+            # Clean up the response - sometimes Gemini adds extra text
+            response_cleaned = response.strip()
+            
+            # Try to extract JSON if it's wrapped in text
+            if '{' in response_cleaned and '}' in response_cleaned:
+                start_idx = response_cleaned.find('{')
+                end_idx = response_cleaned.rfind('}') + 1
+                if start_idx >= 0 and end_idx > start_idx:
+                    response_cleaned = response_cleaned[start_idx:end_idx]
+            
+            # Parse the JSON response
+            try:
+                import json
+                result = json.loads(response_cleaned)
+                
+                # Convert to our expected format
+                validation_data = result.get("validation", {})
+                validation = ValidationResult(
+                    is_valid=validation_data.get("is_valid", True),
+                    final_category=validation_data.get("final_category", yolo_prediction),
+                    detection_source="Gemini Corrected" if validation_data.get("is_corrected", False) else "YOLO",
+                    gemini_feedback=f"Confidence: {validation_data.get('confidence_assessment', 'medium')}"
+                )
+                
+                return {
+                    "validation": validation,
+                    "description": result.get("description", f"Perangkat {category.lower()} dalam kondisi baik"),
+                    "suggestions": result.get("suggestions", [
+                        "Periksa kondisi perangkat secara visual",
+                        "Pisahkan komponen yang dapat didaur ulang", 
+                        "Bawa ke pusat daur ulang e-waste terdekat"
+                    ]),
+                    "damage_level": result.get("damage_level", 2),
+                    "risk_level": result.get("risk_level", 5)
+                }
+                
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse comprehensive JSON response: {e}")
+                logger.debug(f"Raw response: {response_cleaned[:200]}...")
+                # Try fallback with more lenient parsing
+                return self._parse_fallback_response(response_cleaned, yolo_prediction, category)
+                
+        except Exception as e:
+            logger.error(f"Comprehensive analysis failed: {str(e)}")
+            return self._get_default_comprehensive_result(yolo_prediction, category)
+    
+    def _parse_fallback_response(self, response: str, yolo_prediction: str, category: str) -> Dict[str, Any]:
+        """Try to extract information from non-JSON Gemini response"""
+        try:
+            # Simple text parsing fallback
+            lines = response.lower().split('\n')
+            
+            # Look for key information
+            description = f"Perangkat {category.lower()} dalam kondisi baik"
+            damage_level = 2
+            risk_level = 5
+            
+            # Try to extract description
+            for line in lines:
+                if any(word in line for word in ['kondisi', 'rusak', 'baik', 'buruk']):
+                    if len(line.strip()) > 10:  # Reasonable length
+                        description = line.strip()
+                        break
+            
+            # Try to extract damage level
+            for line in lines:
+                if 'damage' in line or 'rusak' in line:
+                    import re
+                    numbers = re.findall(r'\b([1-9]|10)\b', line)
+                    if numbers:
+                        damage_level = min(int(numbers[0]), 10)
+                        break
+            
+            return {
+                "validation": ValidationResult(
+                    is_valid=True,
+                    final_category=yolo_prediction,
+                    detection_source="YOLO",
+                    gemini_feedback="Fallback parsing used"
+                ),
+                "description": description,
+                "suggestions": [
+                    "Periksa kondisi perangkat secara visual",
+                    "Pisahkan komponen yang dapat didaur ulang",
+                    "Bawa ke pusat daur ulang e-waste terdekat"
+                ],
+                "damage_level": damage_level,
+                "risk_level": risk_level
+            }
+            
+        except Exception as e:
+            logger.error(f"Fallback parsing failed: {e}")
+            return self._get_default_comprehensive_result(yolo_prediction, category)
+
+    def _get_default_comprehensive_result(self, yolo_prediction: str, category: str) -> Dict[str, Any]:
+        """Get default comprehensive result when Gemini fails"""
+        return {
+            "validation": ValidationResult(
+                is_valid=True,
+                final_category=yolo_prediction or category,
+                detection_source="YOLO",
+                gemini_feedback="Using fallback analysis"
+            ),
+            "description": f"Perangkat {category.lower()} terdeteksi dalam kondisi baik",
+            "suggestions": [
+                "Periksa kondisi perangkat secara visual",
+                "Pisahkan komponen yang dapat didaur ulang",
+                "Bawa ke pusat daur ulang e-waste terdekat"
+            ],
+            "damage_level": 2,
+            "risk_level": 5
+        }
+
+    async def process_essential_analysis(
+        self, 
+        image_path: str, 
+        category: str, 
+        yolo_prediction: str = None,
+        yolo_confidence: float = None,
+        prompt_context: dict = None
+    ) -> Dict[str, Any]:
+        """
+        FAST MODE: Process only essential Gemini operations for speed:
+        - YOLO Validation only
+        - Skip description, suggestions, and damage analysis for speed
+        
+        Args:
+            image_path: Path to cropped detection image
+            category: Display category for content generation
+            yolo_prediction: Original YOLO prediction for validation
+            yolo_confidence: YOLO confidence score
+            prompt_context: Optional context information
+            
+        Returns:
+            Dictionary with essential analysis results
+        """
+        if not self.is_available or self.model is None:
+            return {
+                "validation": ValidationResult(
+                    is_valid=True,
+                    final_category=yolo_prediction or category,
+                    detection_source="YOLO",
+                    gemini_feedback="Gemini not available"
+                ),
+                "description": f"Perangkat {category.lower()} terdeteksi dalam kondisi baik",
+                "suggestions": [
+                    "Periksa kondisi perangkat secara visual",
+                    "Pisahkan komponen yang dapat didaur ulang",
+                    "Bawa ke pusat daur ulang e-waste terdekat"
+                ],
+                "damage_level": 2  # Default good condition
+            }
+        
+        try:
+            # Only run validation for essential mode
+            validation_task = None
+            if yolo_prediction and yolo_confidence is not None:
+                validation_task = self.validate_yolo_detection(
+                    image_path, yolo_prediction, yolo_confidence, 
+                    None, prompt_context
+                )
+            
+            # Execute validation
+            if validation_task:
+                validation_result = await validation_task
+            else:
+                validation_result = ValidationResult(
+                    is_valid=True,
+                    final_category=yolo_prediction or category,
+                    detection_source="YOLO",
+                    gemini_feedback="No validation needed"
+                )
+            
+            # Return with fast defaults
+            return {
+                "validation": validation_result,
+                "description": f"Perangkat {category.lower()} terdeteksi dalam kondisi baik",
+                "suggestions": [
+                    "Periksa kondisi perangkat secara visual",
+                    "Pisahkan komponen yang dapat didaur ulang",
+                    "Bawa ke pusat daur ulang e-waste terdekat"
+                ],
+                "damage_level": 2  # Default good condition
+            }
+            
+        except Exception as e:
+            logger.error(f"Essential analysis failed: {str(e)}")
+            return {
+                "validation": ValidationResult(
+                    is_valid=True,
+                    final_category=yolo_prediction or category,
+                    detection_source="YOLO",
+                    gemini_feedback=f"Essential analysis error: {str(e)}"
+                ),
+                "description": f"Perangkat {category.lower()} terdeteksi dalam kondisi baik",
+                "suggestions": [
+                    "Periksa kondisi perangkat secara visual",
+                    "Pisahkan komponen yang dapat didaur ulang",
+                    "Bawa ke pusat daur ulang e-waste terdekat"
+                ],
+                "damage_level": 2
+            }
 
     async def process_batch_analysis(
         self, 
